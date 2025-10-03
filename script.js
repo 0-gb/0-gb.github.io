@@ -434,7 +434,7 @@ class Unit {
         const dy = targetWaypoint.y - this.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         
-        if (dist < 5) {
+        if (dist < TILE_SIZE/2) {
             // Reached waypoint, move to next
             this.currentPathIndex++;
             if (this.currentPathIndex >= this.path.length) {
@@ -457,6 +457,8 @@ class Unit {
     // Set path for movement
     setPath(targetX, targetY) {
         this.path = pathfinder.findPath(this.x, this.y, targetX, targetY);
+        this.path[this.path.length-1].x=targetX
+        this.path[this.path.length-1].y=targetY
         this.currentPathIndex = 0;
         this.moving = true;
     }
@@ -526,7 +528,7 @@ class Knight extends Unit {
         this.range = 40;
         this.attackSpeed = 900;
         this.moveSpeed = 1.4;
-        this.size = 16;
+        this.size = 8; // Reduced by half from 16
     }
 }
 
@@ -539,10 +541,10 @@ class Catapult extends Unit {
         this.range = 250;
         this.attackSpeed = 3000;
         this.moveSpeed = 0.5;
-        this.size = 20;
+        this.size = 10; // Reduced by half from 20
         
         // Catapult-specific projectile properties
-        this.projectileSize = 5;
+        this.projectileSize = 2.5; // Reduced by half from 5
         this.projectileSpeed = 2;
     }
     
@@ -577,10 +579,10 @@ class Archer extends Unit {
         this.range = 150;
         this.attackSpeed = 1500;
         this.moveSpeed = 1.0;
-        this.size = 14;
+        this.size = 7; // Reduced by half from 14
         
         // Archer-specific projectile properties
-        this.projectileSize = 3;
+        this.projectileSize = 1.5; // Reduced by half from 3
         this.projectileSpeed = 4;
     }
     
@@ -615,7 +617,7 @@ class Pikeman extends Unit {
         this.range = 40;
         this.attackSpeed = 1100;
         this.moveSpeed = 1.1;
-        this.size = 15;
+        this.size = 7.5; // Reduced by half from 15
     }
     
     performAttack() {
