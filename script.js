@@ -19,17 +19,37 @@ class AStar {
         this.gridHeight = Math.ceil(canvas.height / TILE_SIZE);
     }
 
-    // Helper: check if a grid cell is blocked by an obstacle
-    isBlocked(gx, gy) {
+    // CHANGED: Helper to check if a grid cell is blocked by an obstacle OR another unit
+    isBlocked(gx, gy, movingUnit = null) {
+        // Bounds check
         if (gx < 0 || gy < 0 || gx >= this.gridWidth || gy >= this.gridHeight) return true;
-        // obstacles are stored in world coordinates aligned to the grid
+        
+        // Static obstacle check
         const wx = gx * TILE_SIZE;
         const wy = gy * TILE_SIZE;
         for (let ob of game.obstacles) {
             if (ob.x === wx && ob.y === wy) return true;
         }
+
+        // NEW: Dynamic unit check
+        const tileRect = { x: wx, y: wy, width: TILE_SIZE, height: TILE_SIZE };
+        for (const other of game.units) {
+            // Ignore the unit that is calculating the path
+            if (movingUnit && other.id === movingUnit.id) continue;
+
+            // Simple circle-rectangle intersection test
+            const circle = { x: other.x, y: other.y, radius: other.size };
+            const closestX = Math.max(tileRect.x, Math.min(circle.x, tileRect.x + tileRect.width));
+            const closestY = Math.max(tileRect.y, Math.min(circle.y, tileRect.y + tileRect.height));
+            const distanceSq = Math.pow(circle.x - closestX, 2) + Math.pow(circle.y - closestY, 2);
+
+            if (distanceSq < (circle.radius * circle.radius)) {
+                return true; // The tile is blocked by another unit
+            }
+        }
         return false;
     }
+
 
     // Heuristic: Euclidean distance between grid cells
     heuristic(ax, ay, bx, by) {
@@ -38,32 +58,27 @@ class AStar {
         return Math.sqrt(dx * dx + dy * dy);
     }
 
-    // Find path using A* algorithm
-    findPath(startX, startY, targetX, targetY) {
-        // Convert world coords to grid coords
+    // CHANGED: Find path using A*, now accepts the moving unit to ignore it in checks
+    findPath(startX, startY, targetX, targetY, movingUnit = null) {
         const startGX = Math.floor(startX / TILE_SIZE);
         const startGY = Math.floor(startY / TILE_SIZE);
         const targetGX = Math.floor(targetX / TILE_SIZE);
         const targetGY = Math.floor(targetY / TILE_SIZE);
 
-        // If start or target is outside or blocked, bail out
-        if (this.isBlocked(startGX, startGY)) {
+        if (this.isBlocked(startGX, startGY, movingUnit)) {
             return null;
         }
-        if (this.isBlocked(targetGX, targetGY)) {
+        if (this.isBlocked(targetGX, targetGY, movingUnit)) {
             return null;
         }
 
-        // If start and target are same tile, return immediate path (start -> center of tile)
         if (startGX === targetGX && startGY === targetGY) {
             return [{ x: startX, y: startY }, { x: targetGX * TILE_SIZE + TILE_SIZE / 2, y: targetGY * TILE_SIZE + TILE_SIZE / 2 }];
         }
 
-        // A* structures
         const openSet = new Set();
-        const openHeap = []; // array of nodes for selecting lowest f (simple linear search)
+        const openHeap = [];
         const cameFrom = new Map();
-
         const gScore = new Map();
         const fScore = new Map();
 
@@ -81,14 +96,12 @@ class AStar {
         setF(startKey, this.heuristic(startGX, startGY, targetGX, targetGY));
         cameFrom.set(startKey, null);
 
-        // 8-direction neighbors
         const neighbors = [
             [1, 0], [-1, 0], [0, 1], [0, -1],
             [1, 1], [1, -1], [-1, 1], [-1, -1]
         ];
 
         while (openSet.size > 0) {
-            // find node in openHeap with lowest fScore
             let currentKey = null;
             let bestF = Infinity;
             let bestIndex = -1;
@@ -104,12 +117,10 @@ class AStar {
 
             if (currentKey === null) break;
 
-            // if reached target, reconstruct
             if (currentKey === targetKey) {
                 return this.reconstructPath(cameFrom, currentKey, startX, startY);
             }
 
-            // remove current from openSet and openHeap
             openSet.delete(currentKey);
             if (bestIndex > -1) openHeap.splice(bestIndex, 1);
 
@@ -120,18 +131,17 @@ class AStar {
                 const ny = cy + dy;
                 const neighborKey = `${nx},${ny}`;
 
-                // bounds & blocked check
                 if (nx < 0 || ny < 0 || nx >= this.gridWidth || ny >= this.gridHeight) continue;
-                if (this.isBlocked(nx, ny)) continue;
+                // CHANGED: Pass movingUnit to isBlocked check
+                if (this.isBlocked(nx, ny, movingUnit)) continue;
 
-                // Prevent cutting corners: if diagonal, ensure both adjacent orthogonals are free
                 if (dx !== 0 && dy !== 0) {
-                    if (this.isBlocked(cx + dx, cy) || this.isBlocked(cx, cy + dy)) {
+                    // CHANGED: Pass movingUnit to corner-cutting check
+                    if (this.isBlocked(cx + dx, cy, movingUnit) || this.isBlocked(cx, cy + dy, movingUnit)) {
                         continue;
                     }
                 }
 
-                // tentative g score
                 const tentativeG = getG(currentKey) + ((dx === 0 || dy === 0) ? 1 : Math.SQRT2);
 
                 if (tentativeG < getG(neighborKey)) {
@@ -147,12 +157,9 @@ class AStar {
                 }
             }
         }
-
-        // No path found
         return null;
     }
 
-    // Reconstruct path from cameFrom map
     reconstructPath(cameFrom, currentKey, startX, startY) {
         const path = [];
         let current = currentKey;
@@ -167,10 +174,7 @@ class AStar {
             current = cameFrom.get(current);
         }
 
-        // Always start from the actual position
         path.push({ x: startX, y: startY });
-
-        // Skip the first node if it’s the same tile we started in
         if (nodes.length > 0) {
             const firstNode = nodes[0];
             const startTileX = Math.floor(startX / TILE_SIZE);
@@ -179,17 +183,13 @@ class AStar {
             const firstNodeTileY = Math.floor(firstNode.y / TILE_SIZE);
             
             if (startTileX === firstNodeTileX && startTileY === firstNodeTileY) {
-                nodes.shift(); // drop redundant "snap-back" waypoint
+                nodes.shift();
             }
         }
-
-        // Add the rest of the nodes
         path.push(...nodes);
         return path;
     }
-
 }
-
 
 // Global A* instance
 const pathfinder = new AStar();
@@ -235,7 +235,6 @@ class Unit {
         this.type = type;
         this.selected = false;
         
-        // Unit stats will be set by child classes
         this.hp = 0;
         this.maxHp = 0;
         this.damage = 0;
@@ -255,22 +254,23 @@ class Unit {
         this.speedBoost = 1;
         this.stance = Unit.Stance.STANDING;
         
-        // For pathfinding
         this.path = null;
         this.currentPathIndex = 0;
         
-        // For attack animation
         this.attackAnimationTime = 0;
         this.attackAnimationDuration = 300; // ms
+
+        // NEW: Properties for collision handling and waiting
+        this.isWaiting = false;
+        this.waitTimer = 0;
+        this.MAX_WAIT_TIME = 300; // ms to wait before recalculating path
     }
     
     update(deltaTime) {
-        // Update attack cooldown
         if (this.attackCooldown > 0) {
             this.attackCooldown -= deltaTime;
         }
         
-        // Update attack animation
         if (this.attackAnimationTime > 0) {
             this.attackAnimationTime -= deltaTime;
             if (this.attackAnimationTime <= 0) {
@@ -278,21 +278,16 @@ class Unit {
             }
         }
         
-        // Check if we have an attack target
         if (this.attackTarget && this.attackTarget.hp > 0) {
             const dist = this.distanceTo(this.attackTarget);
-            
             if (dist <= this.range) {
-                // In range, stop and attack
                 this.moving = false;
                 this.targetX = this.x;
                 this.targetY = this.y;
-                
                 if (this.attackCooldown <= 0 && !this.isAttacking) {
                     this.performAttack();
                 }
             } else {
-                // Move towards target
                 this.targetX = this.attackTarget.x;
                 this.targetY = this.attackTarget.y;
                 this.moving = true;
@@ -301,30 +296,23 @@ class Unit {
             this.attackTarget = null;
         }
         
-        // Movement
         if (this.moving && !this.isAttacking) {
-            // Use A* pathfinding for single units, old movement for formations
             if (this.formation) {
-                // Formation movement (old system)
+                // Formation movement
                 const dx = this.targetX - this.x;
                 const dy = this.targetY - this.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
                 
                 if (dist > 2) {
                     let currentSpeed = this.moveSpeed * this.speedBoost;
-                    
-                    // If in formation, use formation speed
                     if (this.formation.isMoving) {
                         currentSpeed = this.formation.speed;
                     }
-                    
-                    // Check distance to formation position for speed boost
                     if (this.formationPosition) {
                         const formDist = Math.sqrt(
                             Math.pow(this.x - this.formationPosition.x, 2) +
                             Math.pow(this.y - this.formationPosition.y, 2)
                         );
-                        
                         if (formDist > 5 && formDist < FORMATION_SPEED_BOOST_RANGE) {
                             currentSpeed *= FORMATION_SPEED_BOOST;
                         }
@@ -332,15 +320,13 @@ class Unit {
                     
                     const moveX = (dx / dist) * currentSpeed;
                     const moveY = (dy / dist) * currentSpeed;
-                    
-                    // Check collision with obstacles
                     const newX = this.x + moveX;
                     const newY = this.y + moveY;
                     
+                    // CHANGED: Removed repulsion logic
                     if (!this.checkObstacleCollision(newX, newY)) {
-                        const repulsion = this.calculateRepulsion();
-                        this.x = newX + repulsion.x;
-                        this.y = newY + repulsion.y;
+                        this.x = newX;
+                        this.y = newY;
                     }
                 } else {
                     this.moving = false;
@@ -349,7 +335,7 @@ class Unit {
                     }
                 }
             } else {
-                // Single unit movement with A* pathfinding
+                // Single unit movement with A*
                 this.followPath(deltaTime);
             }
         } else {
@@ -368,7 +354,6 @@ class Unit {
         this.hp -= damage;
         if (this.hp <= 0) {
             this.hp = 0;
-            // Remove from game units
             const index = game.units.indexOf(this);
             if (index > -1) {
                 game.units.splice(index, 1);
@@ -376,31 +361,19 @@ class Unit {
         }
     }
     
-    calculateRepulsion() {
-        const repulsion = { x: 0, y: 0 };
-        
-        // Only apply repulsion if moving
-        if (!this.moving) return repulsion;
-        
-        game.units.forEach(other => {
-            if (other === this) return;
-            
-            const dist = this.distanceTo(other);
-            const minDist = this.size + other.size;
-            
-            if (dist < minDist && dist > 0) {
-                // Only repel if the other unit is not attacking
-                if (!other.isAttacking) {
-                    const force = (minDist - dist) / minDist * 0.5;
-                    const dx = this.x - other.x;
-                    const dy = this.y - other.y;
-                    repulsion.x += (dx / dist) * force;
-                    repulsion.y += (dy / dist) * force;
-                }
+    // REMOVED: calculateRepulsion() function deleted entirely.
+
+    // NEW: Helper function to check for collisions with other units
+    isCollidingWithUnits(x, y) {
+        for (const other of game.units) {
+            if (other.id === this.id) continue;
+            const distSq = Math.pow(x - other.x, 2) + Math.pow(y - other.y, 2);
+            const minDisSq = Math.pow(this.size + other.size, 2);
+            if (distSq < minDisSq) {
+                return true; // Collision detected
             }
-        });
-        
-        return repulsion;
+        }
+        return false;
     }
     
     checkObstacleCollision(x, y) {
@@ -421,66 +394,81 @@ class Unit {
         return Math.sqrt(dx * dx + dy * dy);
     }
     
-    // Follow A* path
+    // CHANGED: Rewritten path following logic
     followPath(deltaTime) {
         if (!this.path || this.currentPathIndex >= this.path.length) {
             this.moving = false;
+            this.isWaiting = false;
             return;
         }
-        
-        // Get current target waypoint
+
+        // If waiting, update timer and check if we should recalculate path
+        if (this.isWaiting) {
+            this.waitTimer += deltaTime;
+            if (this.waitTimer >= this.MAX_WAIT_TIME) {
+                this.isWaiting = false;
+                this.waitTimer = 0;
+                // Recalculate path to the final destination
+                const finalTarget = this.path[this.path.length - 1];
+                this.setPath(finalTarget.x, finalTarget.y);
+            }
+            return; // Don't move while waiting
+        }
+
         const targetWaypoint = this.path[this.currentPathIndex];
         const dx = targetWaypoint.x - this.x;
         const dy = targetWaypoint.y - this.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        
-        if (dist < TILE_SIZE/2) {
-            // Reached waypoint, move to next
+
+        if (dist < 5) { // Reached waypoint
             this.currentPathIndex++;
             if (this.currentPathIndex >= this.path.length) {
                 this.moving = false;
-                return;
             }
-        } else {
-            // Move towards waypoint
-            const currentSpeed = this.moveSpeed * this.speedBoost;
-            const moveX = (dx / dist) * currentSpeed;
-            const moveY = (dy / dist) * currentSpeed;
-            
-            // Apply repulsion from other units
-            const repulsion = this.calculateRepulsion();
-            this.x += moveX + repulsion.x;
-            this.y += moveY + repulsion.y;
+            return;
         }
+
+        // Calculate prospective move for this frame
+        const currentSpeed = this.moveSpeed * this.speedBoost;
+        const moveX = (dx / dist) * currentSpeed;
+        const moveY = (dy / dist) * currentSpeed;
+        const nextX = this.x + moveX;
+        const nextY = this.y + moveY;
+
+        // Check for collision with other units before moving
+        if (this.isCollidingWithUnits(nextX, nextY)) {
+            this.isWaiting = true; // Blocked, so start waiting
+            this.waitTimer = 0;
+            return; // Stop moving this frame
+        }
+        
+        // Path is clear, perform the move
+        this.x = nextX;
+        this.y = nextY;
     }
     
-    // Set path for movement
+    // CHANGED: setPath now passes the unit itself to the pathfinder
     setPath(targetX, targetY) {
-        this.path = pathfinder.findPath(this.x, this.y, targetX, targetY);
-        this.path[this.path.length-1].x=targetX
-        this.path[this.path.length-1].y=targetY
+        // Pass 'this' so the pathfinder can ignore this unit in its obstacle checks
+        this.path = pathfinder.findPath(this.x, this.y, targetX, targetY, this);
         this.currentPathIndex = 0;
         this.moving = true;
+        // Reset waiting state on new path
+        this.isWaiting = false;
+        this.waitTimer = 0;
     }
     
     draw(ctx) {
-        // Draw unit
         ctx.save();
         ctx.translate(this.x, this.y);
-        
-        // Unit body
         ctx.fillStyle = this.team === 1 ? game.team1Color : game.team2Color;
         if (this.type === 'catapult') {
-            // Draw catapult as square
             ctx.fillRect(-this.size, -this.size, this.size * 2, this.size * 2);
         } else {
-            // Draw other units as circles
             ctx.beginPath();
             ctx.arc(0, 0, this.size, 0, Math.PI * 2);
             ctx.fill();
         }
-        
-        // Draw type indicator
         ctx.fillStyle = 'white';
         ctx.font = '12px Arial';
         ctx.textAlign = 'center';
@@ -488,8 +476,6 @@ class Unit {
                           (this.type === 'archer' ? 'A' : 
                           (this.type === 'catapult' ? 'C' : 'P'));
         ctx.fillText(typeSymbol, 0, 4);
-        
-        // Draw selection ring
         if (this.selected) {
             ctx.strokeStyle = '#00ff00';
             ctx.lineWidth = 2;
@@ -497,16 +483,12 @@ class Unit {
             ctx.arc(0, 0, this.size + 5, 0, Math.PI * 2);
             ctx.stroke();
         }
-        
-        // Draw health bar
         if (this.hp < this.maxHp) {
             ctx.fillStyle = 'red';
             ctx.fillRect(-this.size, -this.size - 10, this.size * 2, 4);
             ctx.fillStyle = 'green';
             ctx.fillRect(-this.size, -this.size - 10, this.size * 2 * (this.hp / this.maxHp), 4);
         }
-        
-        // Draw attack animation
         if (this.isAttacking && this.attackAnimationTime > 0) {
             ctx.strokeStyle = 'yellow';
             ctx.lineWidth = 3;
@@ -514,7 +496,6 @@ class Unit {
             ctx.arc(0, 0, this.size + 10, 0, Math.PI * 2 * (this.attackAnimationTime / this.attackAnimationDuration));
             ctx.stroke();
         }
-        
         ctx.restore();
     }
 }
@@ -528,7 +509,7 @@ class Knight extends Unit {
         this.range = 40;
         this.attackSpeed = 900;
         this.moveSpeed = 1.4;
-        this.size = 8; // Reduced by half from 16
+        this.size = 16;
     }
 }
 
@@ -541,30 +522,18 @@ class Catapult extends Unit {
         this.range = 250;
         this.attackSpeed = 3000;
         this.moveSpeed = 0.5;
-        this.size = 10; // Reduced by half from 20
-        
-        // Catapult-specific projectile properties
-        this.projectileSize = 2.5; // Reduced by half from 5
+        this.size = 20;
+        this.projectileSize = 5;
         this.projectileSpeed = 2;
     }
-    
     performAttack() {
         this.isAttacking = true;
         this.attackAnimationTime = this.attackAnimationDuration;
         this.attackCooldown = this.attackSpeed;
-        
-        // Create projectile with catapult-specific properties
         const projectile = new Projectile(
-            this.x, 
-            this.y,
-            this.attackTarget.x, 
-            this.attackTarget.y,
-            this.damage,
-            this.projectileSize,
-            this.projectileSpeed,
-            this, 
-            this.attackTarget,
-            this.type
+            this.x, this.y, this.attackTarget.x, this.attackTarget.y,
+            this.damage, this.projectileSize, this.projectileSpeed,
+            this, this.attackTarget, this.type
         );
         game.projectiles.push(projectile);
     }
@@ -579,30 +548,18 @@ class Archer extends Unit {
         this.range = 150;
         this.attackSpeed = 1500;
         this.moveSpeed = 1.0;
-        this.size = 7; // Reduced by half from 14
-        
-        // Archer-specific projectile properties
-        this.projectileSize = 1.5; // Reduced by half from 3
+        this.size = 14;
+        this.projectileSize = 3;
         this.projectileSpeed = 4;
     }
-    
     performAttack() {
         this.isAttacking = true;
         this.attackAnimationTime = this.attackAnimationDuration;
         this.attackCooldown = this.attackSpeed;
-        
-        // Create projectile with archer-specific properties
         const projectile = new Projectile(
-            this.x, 
-            this.y,
-            this.attackTarget.x, 
-            this.attackTarget.y,
-            this.damage,
-            this.projectileSize,
-            this.projectileSpeed,
-            this, 
-            this.attackTarget,
-            this.type
+            this.x, this.y, this.attackTarget.x, this.attackTarget.y,
+            this.damage, this.projectileSize, this.projectileSpeed,
+            this, this.attackTarget, this.type
         );
         game.projectiles.push(projectile);
     }
@@ -617,21 +574,16 @@ class Pikeman extends Unit {
         this.range = 40;
         this.attackSpeed = 1100;
         this.moveSpeed = 1.1;
-        this.size = 7.5; // Reduced by half from 15
+        this.size = 15;
     }
-    
     performAttack() {
         this.isAttacking = true;
         this.attackAnimationTime = this.attackAnimationDuration;
         this.attackCooldown = this.attackSpeed;
-        
-        // Pikeman deals bonus damage to cavalry units (Knights)
         let actualDamage = this.damage;
         if (this.attackTarget && this.attackTarget.type === 'knight') {
-            actualDamage *= 1.5; // 50% bonus damage vs cavalry
+            actualDamage *= 1.5;
         }
-        
-        // Melee always hits
         this.attackTarget.takeDamage(actualDamage);
     }
 }
@@ -644,47 +596,37 @@ class Projectile {
         this.damage = damage;
         this.size = size;
         this.speed = speed;
-        this.targetX = targetX
-        this.targetY = targetY
-        this.shooterUnit = shooterUnit
-        this.targetUnit = targetUnit
-        this.damageType = damageType
-
+        this.targetX = targetX;
+        this.targetY = targetY;
+        this.shooterUnit = shooterUnit;
+        this.targetUnit = targetUnit;
+        this.damageType = damageType;
         const dx = this.targetX - x;
         const dy = this.targetY - y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         this.vx = (dx / dist) * speed;
         this.vy = (dy / dist) * speed;
-        
         this.active = true;
     }
-    
     update() {
         if (!this.active) return;
-        
         this.x += this.vx;
         this.y += this.vy;
-
-        // Remove if out of bounds
         if (this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) {
             this.active = false;
         }
-        let xdif = this.targetX - this.x
-        if(this.vx < 0)
-            xdif = this.x - this.targetX
-        let ydif = this.targetY - this.y
-        if(this.vy < 0)
-            ydif = this.y - this.targetY
-        if (xdif <= HIT_THRESHOLD && ydif <= HIT_THRESHOLD){
-                this.active = false;
-                const dist = Math.sqrt(Math.pow(this.x - this.targetUnit.x, 2) + Math.pow(this.y - this.targetUnit.y, 2));
-                if(dist < this.targetUnit.size)
-                    this.targetUnit.takeDamage(this.damage);
-                
+        let xdif = this.targetX - this.x;
+        if (this.vx < 0) xdif = this.x - this.targetX;
+        let ydif = this.targetY - this.y;
+        if (this.vy < 0) ydif = this.y - this.targetY;
+        if (xdif <= HIT_THRESHOLD && ydif <= HIT_THRESHOLD) {
+            this.active = false;
+            const dist = Math.sqrt(Math.pow(this.x - this.targetUnit.x, 2) + Math.pow(this.y - this.targetUnit.y, 2));
+            if (dist < this.targetUnit.size) {
+                this.targetUnit.takeDamage(this.damage);
             }
-      
+        }
     }
-    
     draw(ctx) {
         if (!this.active) return;
         ctx.fillStyle = 'orange';
@@ -702,39 +644,26 @@ class Formation {
         this.targetY = targetY;
         this.isMoving = false;
         this.speed = Math.min(...units.map(u => u.moveSpeed));
-        
-        // Calculate center of mass
         this.centerX = units.reduce((sum, u) => sum + u.x, 0) / units.length;
         this.centerY = units.reduce((sum, u) => sum + u.y, 0) / units.length;
-        
-        // Assign formation positions
         this.assignFormationPositions();
-        
-        // Set formation reference in units
-        units.forEach(unit => {
-            unit.formation = this;
-        });
+        units.forEach(unit => unit.formation = this);
     }
-    
     assignFormationPositions() {
         const spacing = 40;
         const cols = Math.ceil(Math.sqrt(this.units.length));
-        
         this.units.forEach((unit, index) => {
             const row = Math.floor(index / cols);
             const col = index % cols;
-            
             unit.formationPosition = {
-                x: this.centerX + (col - cols/2) * spacing,
-                y: this.centerY + (row - Math.ceil(this.units.length/cols)/2) * spacing
+                x: this.centerX + (col - cols / 2) * spacing,
+                y: this.centerY + (row - Math.ceil(this.units.length / cols) / 2) * spacing
             };
-            
             unit.targetX = unit.formationPosition.x;
             unit.targetY = unit.formationPosition.y;
             unit.moving = true;
         });
     }
-    
     checkFormationReady() {
         const unitsInPosition = this.units.filter(unit => {
             if (!unit.formationPosition) return false;
@@ -744,25 +673,20 @@ class Formation {
             );
             return dist < 10;
         });
-        
         if (unitsInPosition.length >= this.units.length * FORMATION_WAIT_PERCENTAGE) {
             this.startMoving();
         }
     }
-    
     startMoving() {
         this.isMoving = true;
-        
         const dx = this.targetX - this.centerX;
         const dy = this.targetY - this.centerY;
-        
         this.units.forEach(unit => {
             unit.targetX = unit.formationPosition.x + dx;
             unit.targetY = unit.formationPosition.y + dy;
             unit.moving = true;
         });
     }
-    
     breakFormation() {
         this.units.forEach(unit => {
             unit.formation = null;
@@ -772,20 +696,18 @@ class Formation {
     }
 }
 
-// Draw grid function
+// The rest of your code (drawing, initialization, input handling) remains largely the same
+// as it correctly calls the modified Unit methods.
+
 function drawGrid() {
     ctx.strokeStyle = '#444';
     ctx.lineWidth = 1;
-    
-    // Draw vertical lines
     for (let x = 0; x <= canvas.width; x += TILE_SIZE) {
         ctx.beginPath();
         ctx.moveTo(x - game.camera.x % TILE_SIZE, 0);
         ctx.lineTo(x - game.camera.x % TILE_SIZE, canvas.height);
         ctx.stroke();
     }
-    
-    // Draw horizontal lines
     for (let y = 0; y <= canvas.height; y += TILE_SIZE) {
         ctx.beginPath();
         ctx.moveTo(0, y - game.camera.y % TILE_SIZE);
@@ -794,71 +716,41 @@ function drawGrid() {
     }
 }
 
-// Initialize game
 function init() {
-    // Create obstacles aligned to grid
     for (let i = 0; i < 30; i++) {
         const gridX = Math.floor(Math.random() * (canvas.width / TILE_SIZE)) * TILE_SIZE;
         const gridY = Math.floor(Math.random() * (canvas.height / TILE_SIZE)) * TILE_SIZE;
-        
-        game.obstacles.push({
-            x: gridX,
-            y: gridY
-        });
+        game.obstacles.push({ x: gridX, y: gridY });
     }
-    
-    // Create initial units using specific classes
     for (let i = 0; i < 5; i++) {
         const unitType = Math.floor(Math.random() * 4);
         switch(unitType) {
-            case 0:
-                game.units.push(new Knight(100 + i * 50, 200, 1));
-                break;
-            case 1:
-                game.units.push(new Archer(100 + i * 50, 200, 1));
-                break;
-            case 2:
-                game.units.push(new Catapult(100 + i * 50, 200, 1));
-                break;
-            case 3:
-                game.units.push(new Pikeman(100 + i * 50, 200, 1));
-                break;
+            case 0: game.units.push(new Knight(100 + i * 50, 200, 1)); break;
+            case 1: game.units.push(new Archer(100 + i * 50, 200, 1)); break;
+            case 2: game.units.push(new Catapult(100 + i * 50, 200, 1)); break;
+            case 3: game.units.push(new Pikeman(100 + i * 50, 200, 1)); break;
         }
     }
-    
     for (let i = 0; i < 5; i++) {
-        const unitType = Math.floor(Math.random() * 3); // Enemy team doesn't have catapults
+        const unitType = Math.floor(Math.random() * 3);
         switch(unitType) {
-            case 0:
-                game.units.push(new Knight(500 + i * 50, 400, 2));
-                break;
-            case 1:
-                game.units.push(new Archer(500 + i * 50, 400, 2));
-                break;
-            case 2:
-                game.units.push(new Pikeman(500 + i * 50, 400, 2));
-                break;
+            case 0: game.units.push(new Knight(500 + i * 50, 400, 2)); break;
+            case 1: game.units.push(new Archer(500 + i * 50, 400, 2)); break;
+            case 2: game.units.push(new Pikeman(500 + i * 50, 400, 2)); break;
         }
     }
 }
 
-// Input handling
 canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0) { // Left click
+    if (e.button === 0) {
         game.dragStart = { x: e.clientX, y: e.clientY };
         game.isDragging = false;
-        
-        // Check if clicking on a unit
         const clickedUnit = getUnitAt(e.clientX, e.clientY);
-        
         if (clickedUnit && !e.shiftKey) {
-            // Clear previous selection
             game.selectedUnits.forEach(u => u.selected = false);
             game.selectedUnits = [];
         }
-        
         if (clickedUnit) {
-            // Allow selecting units from any team
             if (!clickedUnit.selected) {
                 clickedUnit.selected = true;
                 game.selectedUnits.push(clickedUnit);
@@ -869,11 +761,10 @@ canvas.addEventListener('mousedown', (e) => {
 
 canvas.addEventListener('mousemove', (e) => {
     game.mousePos = { x: e.clientX, y: e.clientY };
-    
     if (game.dragStart && !game.isDragging) {
         const dx = e.clientX - game.dragStart.x;
         const dy = e.clientY - game.dragStart.y;
-        if (Math.sqrt(dx*dx + dy*dy) > 5) {
+        if (Math.sqrt(dx * dx + dy * dy) > 5) {
             game.isDragging = true;
         }
     }
@@ -881,21 +772,17 @@ canvas.addEventListener('mousemove', (e) => {
 
 canvas.addEventListener('mouseup', (e) => {
     if (e.button === 0 && game.isDragging) {
-        // Box select
         const rect = {
             x: Math.min(game.dragStart.x, e.clientX),
             y: Math.min(game.dragStart.y, e.clientY),
             width: Math.abs(e.clientX - game.dragStart.x),
             height: Math.abs(e.clientY - game.dragStart.y)
         };
-        
         if (!e.shiftKey) {
             game.selectedUnits.forEach(u => u.selected = false);
             game.selectedUnits = [];
         }
-        
         game.units.forEach(unit => {
-            // Allow selecting units from any team
             if (unit.x > rect.x && unit.x < rect.x + rect.width &&
                 unit.y > rect.y && unit.y < rect.y + rect.height) {
                 if (!unit.selected) {
@@ -905,31 +792,24 @@ canvas.addEventListener('mouseup', (e) => {
             }
         });
     }
-    
     game.dragStart = null;
     game.isDragging = false;
 });
 
 canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    
     if (game.selectedUnits.length > 0) {
         const targetUnit = getUnitAt(e.clientX, e.clientY);
-        
         if (targetUnit && targetUnit.team !== 1) {
-            // Attack command
             game.selectedUnits.forEach(unit => {
                 unit.attackTarget = targetUnit;
                 unit.formation = null;
                 unit.formationPosition = null;
             });
         } else {
-            // Move command
             if (game.selectedUnits.length > 1) {
-                // Create formation
-                const formation = new Formation(game.selectedUnits, e.clientX, e.clientY);
+                new Formation(game.selectedUnits, e.clientX, e.clientY);
             } else {
-                // Single unit move with A* pathfinding
                 game.selectedUnits[0].setPath(e.clientX, e.clientY);
                 game.selectedUnits[0].attackTarget = null;
                 game.selectedUnits[0].formation = null;
@@ -940,10 +820,7 @@ canvas.addEventListener('contextmenu', (e) => {
 
 document.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 's') {
-        // Stop command
         game.selectedUnits.forEach(unit => {
-            unit.targetX = unit.x;
-            unit.targetY = unit.y;
             unit.moving = false;
             unit.attackTarget = null;
             if (unit.formation) {
@@ -962,7 +839,6 @@ function getUnitAt(x, y) {
     }
     return null;
 }
-
 // Game loop
 let lastTime = 0;
 function gameLoop(currentTime) {
