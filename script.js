@@ -156,21 +156,38 @@ class AStar {
     reconstructPath(cameFrom, currentKey, startX, startY) {
         const path = [];
         let current = currentKey;
-
+        
+        const nodes = [];
         while (current) {
             const [x, y] = current.split(',').map(Number);
-            // Convert grid coordinates back to world coordinates (center of tile)
-            path.unshift({
-                x: x * TILE_SIZE + TILE_SIZE / 2,
-                y: y * TILE_SIZE + TILE_SIZE / 2
+            nodes.unshift({ 
+                x: x * TILE_SIZE + TILE_SIZE / 2, 
+                y: y * TILE_SIZE + TILE_SIZE / 2 
             });
             current = cameFrom.get(current);
         }
 
-        // Add the actual start position
-        path.unshift({ x: startX, y: startY });
+        // Always start from the actual position
+        path.push({ x: startX, y: startY });
+
+        // Skip the first node if it’s the same tile we started in
+        if (nodes.length > 0) {
+            const firstNode = nodes[0];
+            const startTileX = Math.floor(startX / TILE_SIZE);
+            const startTileY = Math.floor(startY / TILE_SIZE);
+            const firstNodeTileX = Math.floor(firstNode.x / TILE_SIZE);
+            const firstNodeTileY = Math.floor(firstNode.y / TILE_SIZE);
+            
+            if (startTileX === firstNodeTileX && startTileY === firstNodeTileY) {
+                nodes.shift(); // drop redundant "snap-back" waypoint
+            }
+        }
+
+        // Add the rest of the nodes
+        path.push(...nodes);
         return path;
     }
+
 }
 
 
@@ -344,8 +361,6 @@ class Unit {
         this.isAttacking = true;
         this.attackAnimationTime = this.attackAnimationDuration;
         this.attackCooldown = this.attackSpeed;
-        
-        // Default melee attack for units without specific implementations
         this.attackTarget.takeDamage(this.damage);
     }
     
