@@ -106,7 +106,7 @@ class AStar {
 
             // if reached target, reconstruct
             if (currentKey === targetKey) {
-                return this.reconstructPath(cameFrom, currentKey, startX, startY);
+                return this.reconstructPath(cameFrom, currentKey, startX, startY, targetX, targetY);
             }
 
             // remove current from openSet and openHeap
@@ -152,8 +152,7 @@ class AStar {
         return null;
     }
 
-    // Reconstruct path from cameFrom map
-    reconstructPath(cameFrom, currentKey, startX, startY) {
+    reconstructPath(cameFrom, currentKey, startX, startY, targetX, targetY) {
         const path = [];
         let current = currentKey;
         
@@ -167,7 +166,7 @@ class AStar {
             current = cameFrom.get(current);
         }
 
-        // Always start from the actual position
+        // Always start from actual position
         path.push({ x: startX, y: startY });
 
         // Skip the first node if it’s the same tile we started in
@@ -179,14 +178,19 @@ class AStar {
             const firstNodeTileY = Math.floor(firstNode.y / TILE_SIZE);
             
             if (startTileX === firstNodeTileX && startTileY === firstNodeTileY) {
-                nodes.shift(); // drop redundant "snap-back" waypoint
+                nodes.shift();
             }
         }
 
-        // Add the rest of the nodes
-        path.push(...nodes);
+        // Add nodes but override the final one with exact target
+        if (nodes.length > 0) {
+            path.push(...nodes.slice(0, -1)); // all but last
+        }
+        path.push({ x: targetX, y: targetY }); // exact target point
+        
         return path;
     }
+
 
 }
 
@@ -421,33 +425,80 @@ class Unit {
         return Math.sqrt(dx * dx + dy * dy);
     }
     
-    // Follow A* path
     followPath(deltaTime) {
         if (!this.path || this.currentPathIndex >= this.path.length) {
             this.moving = false;
             return;
         }
         
-        // Get current target waypoint
+        // Current target waypoint
         const targetWaypoint = this.path[this.currentPathIndex];
-        const dx = targetWaypoint.x - this.x;
-        const dy = targetWaypoint.y - this.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        
-        if (dist < TILE_SIZE/2) {
-            // Reached waypoint, move to next
+        let dx = targetWaypoint.x - this.x;
+        let dy = targetWaypoint.y - this.y;
+        let dist = Math.sqrt(dx * dx + dy * dy);
+
+        const isFinalWaypoint = (this.currentPathIndex === this.path.length - 1);
+        const currentSpeed = this.moveSpeed * this.speedBoost;
+
+        // If we're exactly on the waypoint already
+        if (dist === 0) {
+            if (isFinalWaypoint) {
+                this.moving = false;
+            }
+            this.currentPathIndex++;
+            return;
+        }
+
+        // -- FINAL waypoint: handle separately and return (no fall-through) --
+        if (isFinalWaypoint) {
+            const SNAP_TOLERANCE = 2; // pixels
+
+            // If we're very close, snap exactly and finish
+            if (dist <= SNAP_TOLERANCE) {
+                this.x = targetWaypoint.x;
+                this.y = targetWaypoint.y;
+                this.currentPathIndex++;
+                this.moving = false;
+                return;
+            }
+
+            // Otherwise, move toward final waypoint (and guard against overshoot caused by repulsion)
+            const moveX = (dx / dist) * currentSpeed;
+            const moveY = (dy / dist) * currentSpeed;
+            const repulsion = this.calculateRepulsion();
+
+            const newX = this.x + moveX + repulsion.x;
+            const newY = this.y + moveY + repulsion.y;
+
+            // If the movement would pass the waypoint (dot product <= 0) — snap to avoid skipping
+            const dot = (targetWaypoint.x - this.x) * (targetWaypoint.x - newX) +
+                        (targetWaypoint.y - this.y) * (targetWaypoint.y - newY);
+            if (dot <= 0) {
+                this.x = targetWaypoint.x;
+                this.y = targetWaypoint.y;
+                this.currentPathIndex++;
+                this.moving = false;
+                return;
+            }
+
+            // Otherwise apply the move normally
+            this.x = newX;
+            this.y = newY;
+            return; // important: don't fall-through to non-final logic
+        }
+
+        // -- NON-final waypoint behavior (unchanged logic) --
+        if (dist < TILE_SIZE / 2) {
+            // reached intermediate waypoint, go to next
             this.currentPathIndex++;
             if (this.currentPathIndex >= this.path.length) {
                 this.moving = false;
                 return;
             }
         } else {
-            // Move towards waypoint
-            const currentSpeed = this.moveSpeed * this.speedBoost;
+            // move toward intermediate waypoint
             const moveX = (dx / dist) * currentSpeed;
             const moveY = (dy / dist) * currentSpeed;
-            
-            // Apply repulsion from other units
             const repulsion = this.calculateRepulsion();
             this.x += moveX + repulsion.x;
             this.y += moveY + repulsion.y;
@@ -677,10 +728,23 @@ class Projectile {
             ydif = this.y - this.targetY
         if (xdif <= HIT_THRESHOLD && ydif <= HIT_THRESHOLD){
                 this.active = false;
+                
+                // Check damage type to determine damage behavior
+                if (this.damageType === 'catapult') {
+                    // Catapult: damage all units in impact area
+                    const impactRadius = this.size * 4; // Area of effect radius
+                    game.units.forEach(unit => {
+                        const dist = Math.sqrt(Math.pow(this.x - unit.x, 2) + Math.pow(this.y - unit.y, 2));
+                        if (dist < impactRadius && unit !== this.shooterUnit) {
+                            unit.takeDamage(this.damage);
+                        }
+                    });
+                } else {
+                    // Archer: single target damage (original logic)
                 const dist = Math.sqrt(Math.pow(this.x - this.targetUnit.x, 2) + Math.pow(this.y - this.targetUnit.y, 2));
                 if(dist < this.targetUnit.size)
                     this.targetUnit.takeDamage(this.damage);
-                
+                }
             }
       
     }
