@@ -1,18 +1,20 @@
 // Canvas setup
+// eslint-disable-next-line no-undef
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
+// eslint-disable-next-line no-undef
 canvas.width = window.innerWidth;
+// eslint-disable-next-line no-undef
 canvas.height = window.innerHeight;
 
-// Game constants
-const GRID_SIZE = 20;
 const TILE_SIZE = 32;
 const FORMATION_WAIT_PERCENTAGE = 0.95;
 const FORMATION_SPEED_BOOST_RANGE = 10 * TILE_SIZE;
 const FORMATION_CHASING_SPEED_BOOST = 1.5;
 const HIT_THRESHOLD = 5;
+const FORMATION_UNIT_DISTANCE = 50
+const FORMATION_PIECE_DISTANCE  = 100
 
-// A* Pathfinding
 class AStar {
     constructor() {
         this.gridWidth = Math.ceil(canvas.width / TILE_SIZE);
@@ -155,13 +157,13 @@ class AStar {
     reconstructPath(cameFrom, currentKey, startX, startY, targetX, targetY) {
         const path = [];
         let current = currentKey;
-        
+
         const nodes = [];
         while (current) {
             const [x, y] = current.split(',').map(Number);
-            nodes.unshift({ 
-                x: x * TILE_SIZE + TILE_SIZE / 2, 
-                y: y * TILE_SIZE + TILE_SIZE / 2 
+            nodes.unshift({
+                x: x * TILE_SIZE + TILE_SIZE / 2,
+                y: y * TILE_SIZE + TILE_SIZE / 2
             });
             current = cameFrom.get(current);
         }
@@ -176,7 +178,7 @@ class AStar {
             const startTileY = Math.floor(startY / TILE_SIZE);
             const firstNodeTileX = Math.floor(firstNode.x / TILE_SIZE);
             const firstNodeTileY = Math.floor(firstNode.y / TILE_SIZE);
-            
+
             if (startTileX === firstNodeTileX && startTileY === firstNodeTileY) {
                 nodes.shift();
             }
@@ -187,7 +189,7 @@ class AStar {
             path.push(...nodes.slice(0, -1)); // all but last
         }
         path.push({ x: targetX, y: targetY }); // exact target point
-        
+
         return path;
     }
 
@@ -196,12 +198,6 @@ class AStar {
 
 // Global A* instance
 const pathfinder = new AStar();
-
-// ID Generator
-let nextId = 1;
-function generateId() {
-    return nextId++;
-}
 
 // Game state
 const game = {
@@ -232,13 +228,12 @@ const Stance = {
 // Base Unit class
 class Unit {
     constructor(x, y, team, type) {
-        this.id = generateId();
         this.x = x;
         this.y = y;
         this.team = team;
         this.type = type;
         this.selected = false;
-        
+
         // Unit stats will be set by child classes
         this.hp = 0;
         this.maxHp = 0;
@@ -247,7 +242,7 @@ class Unit {
         this.attackSpeed = 0;
         this.moveSpeed = 0;
         this.radius = 0;
-        
+
         this.targetX = x;
         this.targetY = y;
         this.attackTarget = null;
@@ -256,24 +251,25 @@ class Unit {
         this.moving = false;
         this.formation = null;
         this.formationPosition = null;
+        this.formationOrder = 0; // Default value, will be overridden by child classes
         this.speedBoost = 1;
         this.stance = Stance.STANDING;
-        
+
         // For pathfinding
         this.path = null;
         this.currentPathIndex = 0;
-        
+
         // For attack animation
         this.attackAnimationTime = 0;
         this.attackAnimationDuration = 300; // ms
     }
-    
+
     update(deltaTime) {
         // Update attack cooldown
         if (this.attackCooldown > 0) {
             this.attackCooldown -= deltaTime;
         }
-        
+
         // Update attack animation
         if (this.attackAnimationTime > 0) {
             this.attackAnimationTime -= deltaTime;
@@ -281,17 +277,17 @@ class Unit {
                 this.isAttacking = false;
             }
         }
-        
+
         // Check if we have an attack target
         if (this.attackTarget && this.attackTarget.hp > 0) {
             const dist = this.distanceTo(this.attackTarget);
-            
+
             if (dist <= this.range) {
                 // In range, stop and attack
                 this.moving = false;
                 this.targetX = this.x;
                 this.targetY = this.y;
-                
+
                 if (this.attackCooldown <= 0 && !this.isAttacking) {
                     this.performAttack();
                 }
@@ -304,7 +300,7 @@ class Unit {
         } else if (this.attackTarget && this.attackTarget.hp <= 0) {
             this.attackTarget = null;
         }
-        
+
         // Movement
         if (this.moving && !this.isAttacking) {
             // Use A* pathfinding for single units, old movement for formations
@@ -313,34 +309,34 @@ class Unit {
                 const dx = this.targetX - this.x;
                 const dy = this.targetY - this.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
-                
+
                 if (dist > 2) {
                     let currentSpeed = this.moveSpeed * this.speedBoost;
-                    
+
                     // If in formation, use formation speed
                     if (this.formation.isMoving) {
                         currentSpeed = this.formation.speed;
                     }
-                    
+
                     // Check distance to formation position for speed boost
                     if (this.formationPosition) {
                         const formDist = Math.sqrt(
                             Math.pow(this.x - this.formationPosition.x, 2) +
                             Math.pow(this.y - this.formationPosition.y, 2)
                         );
-                        
+
                         if (formDist > 5 && formDist < FORMATION_SPEED_BOOST_RANGE) {
                             currentSpeed *= FORMATION_CHASING_SPEED_BOOST;
                         }
                     }
-                    
+
                     const moveX = (dx / dist) * currentSpeed;
                     const moveY = (dy / dist) * currentSpeed;
-                    
+
                     // Check collision with obstacles
                     const newX = this.x + moveX;
                     const newY = this.y + moveY;
-                    
+
                     if (!this.checkObstacleCollision(newX, newY)) {
                         const repulsion = this.calculateRepulsion();
                         this.x = newX + repulsion.x;
@@ -360,14 +356,14 @@ class Unit {
             this.moving = false;
         }
     }
-    
+
     performAttack() {
         this.isAttacking = true;
         this.attackAnimationTime = this.attackAnimationDuration;
         this.attackCooldown = this.attackSpeed;
         this.attackTarget.takeDamage(this.damage);
     }
-    
+
     takeDamage(damage) {
         this.hp -= damage;
         if (this.hp <= 0) {
@@ -379,19 +375,23 @@ class Unit {
             }
         }
     }
-    
+
     calculateRepulsion() {
         const repulsion = { x: 0, y: 0 };
-        
+
         // Only apply repulsion if moving
         if (!this.moving) return repulsion;
-        
+
         game.units.forEach(other => {
             if (other === this) return;
-            
+
+            if (this.formation && other.formation && this.formation === other.formation) {
+                return;
+            }
+
             const dist = this.distanceTo(other);
             const minDist = this.radius + other.radius;
-            
+
             if (dist < minDist && dist > 0) {
                 // Only repel if the other unit is not attacking
                 if (!other.isAttacking) {
@@ -403,10 +403,27 @@ class Unit {
                 }
             }
         });
-        
+
+        // Repel from obstacles (immovable objects)
+        game.obstacles.forEach(obstacle => {
+            // Calculate distance from unit center to obstacle edges
+            const closestX = Math.max(obstacle.x, Math.min(this.x, obstacle.x + TILE_SIZE));
+            const closestY = Math.max(obstacle.y, Math.min(this.y, obstacle.y + TILE_SIZE));
+            
+            const dx = this.x - closestX;
+            const dy = this.y - closestY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            
+            if (dist*0.5 < this.radius) {
+                const force = (this.radius - dist) / this.radius * 0.8; // Stronger repulsion from obstacles
+                repulsion.x += -(dx / dist) * force;
+                repulsion.y += -(dy / dist) * force;
+            }
+        });
+
         return repulsion;
     }
-    
+
     checkObstacleCollision(x, y) {
         for (let obstacle of game.obstacles) {
             if (x + this.radius > obstacle.x &&
@@ -418,19 +435,19 @@ class Unit {
         }
         return false;
     }
-    
+
     distanceTo(other) {
         const dx = this.x - other.x;
         const dy = this.y - other.y;
         return Math.sqrt(dx * dx + dy * dy);
     }
-    
+
     followPath(deltaTime) {
         if (!this.path || this.currentPathIndex >= this.path.length) {
             this.moving = false;
             return;
         }
-        
+
         // Current target waypoint
         const targetWaypoint = this.path[this.currentPathIndex];
         let dx = targetWaypoint.x - this.x;
@@ -472,7 +489,7 @@ class Unit {
 
             // If the movement would pass the waypoint (dot product <= 0) — snap to avoid skipping
             const dot = (targetWaypoint.x - this.x) * (targetWaypoint.x - newX) +
-                        (targetWaypoint.y - this.y) * (targetWaypoint.y - newY);
+                (targetWaypoint.y - this.y) * (targetWaypoint.y - newY);
             if (dot <= 0) {
                 this.x = targetWaypoint.x;
                 this.y = targetWaypoint.y;
@@ -504,36 +521,36 @@ class Unit {
             this.y += moveY + repulsion.y;
         }
     }
-    
+
     // Set path for movement
     setPath(targetX, targetY) {
         this.path = pathfinder.findPath(this.x, this.y, targetX, targetY);
-        this.path[this.path.length-1].x=targetX
-        this.path[this.path.length-1].y=targetY
+        this.path[this.path.length - 1].x = targetX
+        this.path[this.path.length - 1].y = targetY
         this.currentPathIndex = 0;
         this.moving = true;
     }
-    
+
     draw(ctx) {
         // Draw unit as circle
         ctx.save();
         ctx.translate(this.x, this.y);
-        
+
         // Unit body - always draw as circle
         ctx.fillStyle = this.team === 1 ? game.team1Color : game.team2Color;
         ctx.beginPath();
         ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
         ctx.fill();
-        
+
         // Draw type indicator (simplified)
         ctx.fillStyle = 'white';
         ctx.font = '12px Arial';
         ctx.textAlign = 'center';
-        const typeSymbol = this.type === 'knight' ? 'K' : 
-                          (this.type === 'archer' ? 'A' : 
-                          (this.type === 'catapult' ? 'C' : 'P'));
+        const typeSymbol = this.type === 'knight' ? 'K' :
+            (this.type === 'archer' ? 'A' :
+                (this.type === 'catapult' ? 'C' : 'P'));
         ctx.fillText(typeSymbol, 0, 4);
-        
+
         // Draw selection ring
         if (this.selected) {
             ctx.strokeStyle = '#00ff00';
@@ -542,7 +559,7 @@ class Unit {
             ctx.arc(0, 0, this.radius + 5, 0, Math.PI * 2);
             ctx.stroke();
         }
-        
+
         // Draw health bar
         if (this.hp < this.maxHp) {
             ctx.fillStyle = 'red';
@@ -550,7 +567,7 @@ class Unit {
             ctx.fillStyle = 'green';
             ctx.fillRect(-this.radius, -this.radius - 10, this.radius * 2 * (this.hp / this.maxHp), 4);
         }
-        
+
         // Draw attack animation
         if (this.isAttacking && this.attackAnimationTime > 0) {
             ctx.strokeStyle = 'yellow';
@@ -559,90 +576,318 @@ class Unit {
             ctx.arc(0, 0, this.radius + 10, 0, Math.PI * 2 * (this.attackAnimationTime / this.attackAnimationDuration));
             ctx.stroke();
         }
+
+        ctx.restore();
+    }
+}
+class Formation {
+    constructor(units, targetX, targetY) {
+        this.allUnits = units; // Keep reference to all original units
+        this.targetX = targetX;
+        this.targetY = targetY;
+        this.isMoving = false;
+
+        // Center of mass (initial)
+        this.centerX = units.reduce((sum, u) => sum + u.x, 0) / units.length;
+        this.centerY = units.reduce((sum, u) => sum + u.y, 0) / units.length;
+
+        // Direction and orientation
+        this.offsetX = this.targetX - this.centerX;
+        this.offsetY = this.targetY - this.centerY;
+        this.dist = Math.hypot(this.offsetX, this.offsetY) || 1e-6;
+        this.angle = Math.atan2(this.offsetY, this.offsetX);
+        this.dir = { x: this.offsetX / this.dist, y: this.offsetY / this.dist };
+
+        // Link units back to formation
+        units.forEach(unit => {
+            unit.formation = this;
+            unit.inFormation = true;
+            if ('facing' in unit) unit.facing = this.angle;
+        });
+        // Calculate slowest speed (only from units still in formation)
+        this.recalculateSpeed();
+
+        // Assign formation positions ONCE (never recalculate)
+        this.assignFormationPositions();
+
+    }
+
+    recalculateSpeed() {
+        const activeUnits = this.allUnits.filter(u => u.inFormation);
+        if (activeUnits.length > 0) {
+            this.speed = Math.min(...activeUnits.map(u => u.moveSpeed));
+        }
+    }
+
+    rotateLocal(x, y) {
+        // Rotate 90° counter-clockwise from standard orientation
+        // In local space: +X points in movement direction (right)
+        //                 +Y points perpendicular (up/left from movement perspective)
+        // We need to rotate our local coords to world space
+        const c = Math.cos(this.angle), s = Math.sin(this.angle);
+        
+        // Standard rotation, but local X becomes world forward direction
+        // Local: X=forward (movement dir), Y=lateral (perpendicular)
+        return { 
+            x: x * c - y * s, 
+            y: x * s + y * c 
+        };
+    }
+
+    // Calculate units per row based on total count
+    getUnitsPerRow(totalUnits) {
+        if (totalUnits <= 18) return 6;
+        if (totalUnits <= 30) return 10;
+        return 14;
+    }
+
+    // Create formation piece for one unit type
+    createFormationPiece(units, offsetX) {
+        const unitsPerRow = this.getUnitsPerRow(units.length);
+        const rows = Math.ceil(units.length / unitsPerRow);
+        
+        const positions = [];
+        
+        for (let row = 0; row < rows; row++) {
+            const startIdx = row * unitsPerRow;
+            const endIdx = Math.min(startIdx + unitsPerRow, units.length);
+            const unitsInRow = endIdx - startIdx;
+            
+            // Center units in each row (rows go perpendicular to movement)
+            const rowWidth = (unitsInRow - 1) * FORMATION_UNIT_DISTANCE;
+            const startY = -rowWidth / 2;
+            
+            for (let i = 0; i < unitsInRow; i++) {
+                const unitIdx = startIdx + i;
+                positions.push({
+                    unit: units[unitIdx],
+                    localX: offsetX - row * FORMATION_UNIT_DISTANCE, // X = forward/back
+                    localY: startY + i * FORMATION_UNIT_DISTANCE      // Y = left/right (perpendicular)
+                });
+            }
+        }
+        
+        return {
+            units: units,
+            positions: positions,
+            width: rows * FORMATION_UNIT_DISTANCE // width in forward direction
+        };
+    }
+
+    assignFormationPositions() {
+        // Group units by type (formationOrder)
+        const unitsByType = {};
+        this.allUnits.forEach(unit => {
+            const order = unit.formationOrder !== undefined ? unit.formationOrder : 999;
+            if (!unitsByType[order]) {
+                unitsByType[order] = [];
+            }
+            unitsByType[order].push(unit);
+        });
+
+        // Sort by formationOrder (0 at front, higher numbers at back)
+        const sortedOrders = Object.keys(unitsByType)
+            .map(Number)
+            .sort((a, b) => a - b);
+
+        // Create formation pieces
+        // Order 0 should be at front (highest X in local space since +X is forward)
+        this.formationPieces = [];
+        let currentOffsetX = 0;
+
+        // Calculate total formation width first to center it
+        let totalWidth = 0;
+        sortedOrders.forEach((order, index) => {
+            const units = unitsByType[order];
+            const unitsPerRow = this.getUnitsPerRow(units.length);
+            const rows = Math.ceil(units.length / unitsPerRow);
+            const pieceWidth = rows * FORMATION_UNIT_DISTANCE;
+            totalWidth += pieceWidth;
+            if (index < sortedOrders.length - 1) {
+                totalWidth += FORMATION_PIECE_DISTANCE;
+            }
+        });
+
+        // Start from front (positive X)
+        currentOffsetX = totalWidth / 2;
+
+        sortedOrders.forEach((order, index) => {
+            const units = unitsByType[order];
+            
+            // Adjust offset to account for this piece's width
+            const unitsPerRow = this.getUnitsPerRow(units.length);
+            const rows = Math.ceil(units.length / unitsPerRow);
+            const pieceWidth = rows * FORMATION_UNIT_DISTANCE;
+            
+            // Position piece so its front edge is at currentOffsetX
+            const pieceOffsetX = currentOffsetX - (pieceWidth - FORMATION_UNIT_DISTANCE) / 2;
+            
+            const piece = this.createFormationPiece(units, pieceOffsetX);
+            this.formationPieces.push(piece);
+            
+            // Move offset for next piece (if any)
+            if (index < sortedOrders.length - 1) {
+                currentOffsetX -= (pieceWidth + FORMATION_PIECE_DISTANCE);
+            }
+        });
+
+        // Assign world positions to all units
+        this.formationPieces.forEach(piece => {
+            piece.positions.forEach(pos => {
+                const { unit, localX, localY } = pos;
+                
+                // Store local coordinates (these NEVER change)
+                unit.formationSlot = { localX, localY };
+                
+                // Calculate initial world position (assembly point)
+                const r = this.rotateLocal(localX, localY);
+                unit.formationPosition = {
+                    x: this.centerX + r.x,
+                    y: this.centerY + r.y
+                };
+                
+                unit.targetX = unit.formationPosition.x;
+                unit.targetY = unit.formationPosition.y;
+                unit.moving = true;
+            });
+        });
+    }
+
+    // Remove unit from formation (when given other orders)
+    removeUnit(unit) {
+        unit.inFormation = false;
+        unit.formation = null;
+        this.recalculateSpeed();
+    }
+
+    // Get only units still in formation
+    getActiveUnits() {
+        return this.allUnits.filter(u => u.inFormation);
+    }
+
+    checkFormationReady() {
+        const activeUnits = this.getActiveUnits();
+        if (activeUnits.length === 0) return;
+
+        const unitsInPosition = activeUnits.filter(unit => {
+            if (!unit.formationPosition) return false;
+            const dx = unit.x - unit.formationPosition.x;
+            const dy = unit.y - unit.formationPosition.y;
+            return Math.hypot(dx, dy) < 10;
+        });
+
+        if (unitsInPosition.length >= activeUnits.length * FORMATION_WAIT_PERCENTAGE) {
+            this.startMoving();
+        }
+    }
+
+    startMoving() {
+        this.isMoving = true;
+
+        // Update destination for all units (including those removed - they keep their slot)
+        this.allUnits.forEach(unit => {
+            if (!unit.formationSlot || !unit.inFormation) return;
+
+            const { localX, localY } = unit.formationSlot;
+            const r = this.rotateLocal(localX, localY);
+            const destX = this.targetX + r.x;
+            const destY = this.targetY + r.y;
+
+            unit.targetX = destX;
+            unit.targetY = destY;
+            unit.formationPosition = { x: destX, y: destY };
+            unit.moving = true;
+
+            if ('facing' in unit) unit.facing = this.angle;
+        });
+    }
+
+    // Call this in your game loop for each unit
+    updateUnitSpeed(unit) {
+        if (!unit.inFormation || !unit.formationPosition) {
+            return unit.moveSpeed; // Not in formation, use normal speed
+        }
+
+        const dx = unit.x - unit.formationPosition.x;
+        const dy = unit.y - unit.formationPosition.y;
+        const distToSlot = Math.hypot(dx, dy);
+
+        if (distToSlot > 10) {
+            // Unit is out of position, give it boost to catch up
+            return unit.moveSpeed + FORMATION_CHASING_SPEED_BOOST;
+        } else {
+            // Unit is in position, move at formation speed
+            return this.speed;
+        }
+    }
+
+    draw(ctx) {
+        const activeUnits = this.getActiveUnits();
+        if (activeUnits.length === 0) return;
+
+        // Draw formation bounds
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        activeUnits.forEach(unit => {
+            if (!unit.formationPosition) return;
+            minX = Math.min(minX, unit.formationPosition.x);
+            maxX = Math.max(maxX, unit.formationPosition.x);
+            minY = Math.min(minY, unit.formationPosition.y);
+            maxY = Math.max(maxY, unit.formationPosition.y);
+        });
+
+        const padding = 10;
+        ctx.save();
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(
+            minX - padding, 
+            minY - padding, 
+            (maxX - minX) + padding * 2, 
+            (maxY - minY) + padding * 2
+        );
+        ctx.setLineDash([]);
+
+        // Draw slot markers (for ALL units, even removed ones - grayed out)
+        this.allUnits.forEach(unit => {
+            if (!unit.formationPosition) return;
+            
+            ctx.fillStyle = unit.inFormation ? '#888' : '#444';
+            const squareSize = unit.inFormation ? 4 : 3;
+            
+            ctx.fillRect(
+                unit.formationPosition.x - squareSize / 2,
+                unit.formationPosition.y - squareSize / 2,
+                squareSize,
+                squareSize
+            );
+        });
+
+        // Draw path
+        ctx.strokeStyle = '#4aa3ff';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(this.centerX, this.centerY);
+        ctx.lineTo(this.targetX, this.targetY);
+        ctx.stroke();
+        
+        // Draw arrow at target to show direction
+        const arrowSize = 15;
+        ctx.fillStyle = '#4aa3ff';
+        ctx.save();
+        ctx.translate(this.targetX, this.targetY);
+        ctx.rotate(this.angle);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-arrowSize, -arrowSize/2);
+        ctx.lineTo(-arrowSize, arrowSize/2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
         
         ctx.restore();
     }
 }
-
-
-// Formation class
-class Formation {
-    constructor(units, targetX, targetY) {
-        this.units = units;
-        this.targetX = targetX;
-        this.targetY = targetY;
-        this.isMoving = false;
-        this.speed = Math.min(...units.map(u => u.moveSpeed));
-        
-        // Calculate center of mass
-        this.centerX = units.reduce((sum, u) => sum + u.x, 0) / units.length;
-        this.centerY = units.reduce((sum, u) => sum + u.y, 0) / units.length;
-        
-        // Assign formation positions
-        this.assignFormationPositions();
-        
-        // Set formation reference in units
-        units.forEach(unit => {
-            unit.formation = this;
-        });
-    }
-    
-    assignFormationPositions() {
-        const spacing = 40;
-        const cols = Math.ceil(Math.sqrt(this.units.length));
-        
-        this.units.forEach((unit, index) => {
-            const row = Math.floor(index / cols);
-            const col = index % cols;
-            
-            unit.formationPosition = {
-                x: this.centerX + (col - cols/2) * spacing,
-                y: this.centerY + (row - Math.ceil(this.units.length/cols)/2) * spacing
-            };
-            
-            unit.targetX = unit.formationPosition.x;
-            unit.targetY = unit.formationPosition.y;
-            unit.moving = true;
-        });
-    }
-    
-    checkFormationReady() {
-        const unitsInPosition = this.units.filter(unit => {
-            if (!unit.formationPosition) return false;
-            const dist = Math.sqrt(
-                Math.pow(unit.x - unit.formationPosition.x, 2) +
-                Math.pow(unit.y - unit.formationPosition.y, 2)
-            );
-            return dist < 10;
-        });
-        
-        if (unitsInPosition.length >= this.units.length * FORMATION_WAIT_PERCENTAGE) {
-            this.startMoving();
-        }
-    }
-    
-    startMoving() {
-        this.isMoving = true;
-        
-        const dx = this.targetX - this.centerX;
-        const dy = this.targetY - this.centerY;
-        
-        this.units.forEach(unit => {
-            unit.targetX = unit.formationPosition.x + dx;
-            unit.targetY = unit.formationPosition.y + dy;
-            unit.moving = true;
-        });
-    }
-    
-    breakFormation() {
-        this.units.forEach(unit => {
-            unit.formation = null;
-            unit.formationPosition = null;
-            unit.speedBoost = 1;
-        });
-    }
-}
-
 
 // Knight class - melee unit
 class Knight extends Unit {
@@ -654,6 +899,7 @@ class Knight extends Unit {
         this.attackSpeed = 900;
         this.moveSpeed = 1.4;
         this.radius = 8; // Reduced by half from 16
+        this.formationOrder = 1;
     }
 }
 
@@ -667,27 +913,28 @@ class Catapult extends Unit {
         this.attackSpeed = 3000;
         this.moveSpeed = 0.5;
         this.radius = 10; // Reduced by half from 20
+        this.formationOrder = 3;
         
         // Catapult-specific projectile properties
         this.projectileSize = 2.5; // Reduced by half from 5
         this.projectileSpeed = 2;
     }
-    
+
     performAttack() {
         this.isAttacking = true;
         this.attackAnimationTime = this.attackAnimationDuration;
         this.attackCooldown = this.attackSpeed;
-        
+
         // Create projectile with catapult-specific properties
         const projectile = new Projectile(
-            this.x, 
+            this.x,
             this.y,
-            this.attackTarget.x, 
+            this.attackTarget.x,
             this.attackTarget.y,
             this.damage,
             this.projectileSize,
             this.projectileSpeed,
-            this, 
+            this,
             this.attackTarget,
             this.type
         );
@@ -705,27 +952,28 @@ class Archer extends Unit {
         this.attackSpeed = 1500;
         this.moveSpeed = 1.0;
         this.radius = 7; // Reduced by half from 14
+        this.formationOrder = 2;
         
         // Archer-specific projectile properties
         this.projectileSize = 1.5; // Reduced by half from 3
         this.projectileSpeed = 4;
     }
-    
+
     performAttack() {
         this.isAttacking = true;
         this.attackAnimationTime = this.attackAnimationDuration;
         this.attackCooldown = this.attackSpeed;
-        
+
         // Create projectile with archer-specific properties
         const projectile = new Projectile(
-            this.x, 
+            this.x,
             this.y,
-            this.attackTarget.x, 
+            this.attackTarget.x,
             this.attackTarget.y,
             this.damage,
             this.projectileSize,
             this.projectileSpeed,
-            this, 
+            this,
             this.attackTarget,
             this.type
         );
@@ -743,19 +991,20 @@ class Pikeman extends Unit {
         this.attackSpeed = 1100;
         this.moveSpeed = 1.1;
         this.radius = 7.5; // Reduced by half from 15
+        this.formationOrder = 0;
     }
-    
+
     performAttack() {
         this.isAttacking = true;
         this.attackAnimationTime = this.attackAnimationDuration;
         this.attackCooldown = this.attackSpeed;
-        
+
         // Pikeman deals bonus damage to cavalry units (Knights)
         let actualDamage = this.damage;
         if (this.attackTarget && this.attackTarget.type === 'knight') {
             actualDamage *= 1.5; // 50% bonus damage vs cavalry
         }
-        
+
         // Melee always hits
         this.attackTarget.takeDamage(actualDamage);
     }
@@ -781,13 +1030,13 @@ class Projectile {
         const dist = Math.sqrt(dx * dx + dy * dy);
         this.vx = (dx / dist) * speed;
         this.vy = (dy / dist) * speed;
-        
+
         this.active = true;
     }
-    
+
     update() {
         if (!this.active) return;
-        
+
         this.x += this.vx;
         this.y += this.vy;
 
@@ -796,34 +1045,34 @@ class Projectile {
             this.active = false;
         }
         let xdif = this.targetX - this.x
-        if(this.vx < 0)
+        if (this.vx < 0)
             xdif = this.x - this.targetX
         let ydif = this.targetY - this.y
-        if(this.vy < 0)
+        if (this.vy < 0)
             ydif = this.y - this.targetY
-        if (xdif <= HIT_THRESHOLD && ydif <= HIT_THRESHOLD){
-                this.active = false;
-                
-                // Check damage type to determine damage behavior
-                if (this.damageType === 'catapult') {
-                    // Catapult: damage all units in impact area
-                    const impactRadius = this.size * 4; // Area of effect radius
-                    game.units.forEach(unit => {
-                        const dist = Math.sqrt(Math.pow(this.x - unit.x, 2) + Math.pow(this.y - unit.y, 2));
-                        if (dist < impactRadius && unit !== this.shooterUnit) {
-                            unit.takeDamage(this.damage);
-                        }
-                    });
-                } else {
+        if (xdif <= HIT_THRESHOLD && ydif <= HIT_THRESHOLD) {
+            this.active = false;
+
+            // Check damage type to determine damage behavior
+            if (this.damageType === 'catapult') {
+                // Catapult: damage all units in impact area
+                const impactRadius = this.size * 4; // Area of effect radius
+                game.units.forEach(unit => {
+                    const dist = Math.sqrt(Math.pow(this.x - unit.x, 2) + Math.pow(this.y - unit.y, 2));
+                    if (dist < impactRadius && unit !== this.shooterUnit) {
+                        unit.takeDamage(this.damage);
+                    }
+                });
+            } else {
                 // Archer: single target damage (original logic)
                 const dist = Math.sqrt(Math.pow(this.x - this.targetUnit.x, 2) + Math.pow(this.y - this.targetUnit.y, 2));
-                if(dist < this.targetUnit.radius)
+                if (dist < this.targetUnit.radius)
                     this.targetUnit.takeDamage(this.damage);
-                }
             }
-      
+        }
+
     }
-    
+
     draw(ctx) {
         if (!this.active) return;
         ctx.fillStyle = 'orange';
@@ -838,7 +1087,7 @@ class Projectile {
 function drawGrid() {
     ctx.strokeStyle = '#444';
     ctx.lineWidth = 1;
-    
+
     // Draw vertical lines
     for (let x = 0; x <= canvas.width; x += TILE_SIZE) {
         ctx.beginPath();
@@ -846,7 +1095,7 @@ function drawGrid() {
         ctx.lineTo(x - game.camera.x % TILE_SIZE, canvas.height);
         ctx.stroke();
     }
-    
+
     // Draw horizontal lines
     for (let y = 0; y <= canvas.height; y += TILE_SIZE) {
         ctx.beginPath();
@@ -859,38 +1108,40 @@ function drawGrid() {
 // Initialize game
 function init() {
     // Create obstacles aligned to grid
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 1; i++) {
         const gridX = Math.floor(Math.random() * (canvas.width / TILE_SIZE)) * TILE_SIZE;
         const gridY = Math.floor(Math.random() * (canvas.height / TILE_SIZE)) * TILE_SIZE;
-        
+
         game.obstacles.push({
             x: gridX,
             y: gridY
         });
     }
-    
+
     // Create initial units using specific classes
-    for (let i = 0; i < 5; i++) {
-        const unitType = Math.floor(Math.random() * 4);
-        switch(unitType) {
-            case 0:
-                game.units.push(new Knight(100 + i * 50, 200, 1));
-                break;
-            case 1:
-                game.units.push(new Archer(100 + i * 50, 200, 1));
-                break;
-            case 2:
-                game.units.push(new Catapult(100 + i * 50, 200, 1));
-                break;
-            case 3:
-                game.units.push(new Pikeman(100 + i * 50, 200, 1));
-                break;
+    for (let j = 0; j < 5; j++) {
+        for (let i = 0; i < 5; i++) {
+            const unitType = Math.floor(Math.random() * 4);
+            switch (unitType) {
+                case 0:
+                    game.units.push(new Knight(100 + i * 15, 150+j*15, 1));
+                    break;
+                case 1:
+                    game.units.push(new Archer(100 + i * 15, 150+j*15, 1));
+                    break;
+                case 2:
+                    game.units.push(new Catapult(100 + i * 15, 150+j*15, 1));
+                    break;
+                case 3:
+                    game.units.push(new Pikeman(100 + i * 15, 150+j*15, 1));
+                    break;
+            }
         }
     }
-    
+
     for (let i = 0; i < 5; i++) {
         const unitType = Math.floor(Math.random() * 3); // Enemy team doesn't have catapults
-        switch(unitType) {
+        switch (unitType) {
             case 0:
                 game.units.push(new Knight(500 + i * 50, 400, 2));
                 break;
@@ -909,16 +1160,16 @@ canvas.addEventListener('mousedown', (e) => {
     if (e.button === 0) { // Left click
         game.dragStart = { x: e.clientX, y: e.clientY };
         game.isDragging = false;
-        
+
         // Check if clicking on a unit
         const clickedUnit = getUnitAt(e.clientX, e.clientY);
-        
+
         if (clickedUnit && !e.shiftKey) {
             // Clear previous selection
             game.selectedUnits.forEach(u => u.selected = false);
             game.selectedUnits = [];
         }
-        
+
         if (clickedUnit) {
             // Allow selecting units from any team
             if (!clickedUnit.selected) {
@@ -931,11 +1182,11 @@ canvas.addEventListener('mousedown', (e) => {
 
 canvas.addEventListener('mousemove', (e) => {
     game.mousePos = { x: e.clientX, y: e.clientY };
-    
+
     if (game.dragStart && !game.isDragging) {
         const dx = e.clientX - game.dragStart.x;
         const dy = e.clientY - game.dragStart.y;
-        if (Math.sqrt(dx*dx + dy*dy) > 5) {
+        if (Math.sqrt(dx * dx + dy * dy) > 5) {
             game.isDragging = true;
         }
     }
@@ -950,12 +1201,12 @@ canvas.addEventListener('mouseup', (e) => {
             width: Math.abs(e.clientX - game.dragStart.x),
             height: Math.abs(e.clientY - game.dragStart.y)
         };
-        
+
         if (!e.shiftKey) {
             game.selectedUnits.forEach(u => u.selected = false);
             game.selectedUnits = [];
         }
-        
+
         game.units.forEach(unit => {
             // Allow selecting units from any team
             if (unit.x > rect.x && unit.x < rect.x + rect.width &&
@@ -967,17 +1218,17 @@ canvas.addEventListener('mouseup', (e) => {
             }
         });
     }
-    
+
     game.dragStart = null;
     game.isDragging = false;
 });
 
 canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    
+
     if (game.selectedUnits.length > 0) {
         const targetUnit = getUnitAt(e.clientX, e.clientY);
-        
+
         if (targetUnit && targetUnit.team !== 1) {
             // Attack command
             game.selectedUnits.forEach(unit => {
@@ -1008,9 +1259,7 @@ document.addEventListener('keydown', (e) => {
             unit.targetY = unit.y;
             unit.moving = false;
             unit.attackTarget = null;
-            if (unit.formation) {
-                unit.formation.breakFormation();
-            }
+            unit.formation = null;
         });
     }
 });
@@ -1030,34 +1279,67 @@ let lastTime = 0;
 function gameLoop(currentTime) {
     const deltaTime = currentTime - lastTime;
     lastTime = currentTime;
-    
+
     // Update
     game.units.forEach(unit => unit.update(deltaTime));
-    
+
     // Update projectiles
     game.projectiles = game.projectiles.filter(p => {
         p.update();
         return p.active;
     });
-    
+
     // Draw
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
+
     // Draw grid
     drawGrid();
-    
+
     // Draw obstacles
     ctx.fillStyle = '#666';
     game.obstacles.forEach(obstacle => {
         ctx.fillRect(obstacle.x, obstacle.y, TILE_SIZE, TILE_SIZE);
     });
-    
+
     // Draw units
     game.units.forEach(unit => unit.draw(ctx));
-    
+
     // Draw projectiles
     game.projectiles.forEach(p => p.draw(ctx));
-    
+
+    // Draw formations
+    const formations = new Set();
+    game.units.forEach(unit => {
+        if (unit.formation) {
+            formations.add(unit.formation);
+        }
+    });
+    formations.forEach(formation => formation.draw(ctx));
+
+    // Draw red cross at center of mass for multiple selected units
+    if (game.selectedUnits.length > 1) {
+        // Calculate center of mass
+        const centerX = game.selectedUnits.reduce((sum, unit) => sum + unit.x, 0) / game.selectedUnits.length;
+        const centerY = game.selectedUnits.reduce((sum, unit) => sum + unit.y, 0) / game.selectedUnits.length;
+
+        // Draw red cross
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 2;
+        const crossSize = 10;
+
+        // Horizontal line
+        ctx.beginPath();
+        ctx.moveTo(centerX - crossSize, centerY);
+        ctx.lineTo(centerX + crossSize, centerY);
+        ctx.stroke();
+
+        // Vertical line
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY - crossSize);
+        ctx.lineTo(centerX, centerY + crossSize);
+        ctx.stroke();
+    }
+
     // Draw selection box
     if (game.isDragging && game.dragStart) {
         ctx.strokeStyle = '#00ff00';
@@ -1071,13 +1353,13 @@ function gameLoop(currentTime) {
         );
         ctx.setLineDash([]);
     }
-    
+
     // Draw UI
     ctx.fillStyle = 'white';
     ctx.font = '16px Arial';
     ctx.fillText(`Selected: ${game.selectedUnits.length} units`, 10, 30);
     ctx.fillText('Controls: Left click/drag - Select | Right click - Move/Attack | S - Stop', 10, canvas.height - 10);
-    
+
     requestAnimationFrame(gameLoop);
 }
 
