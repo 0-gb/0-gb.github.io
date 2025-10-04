@@ -1,19 +1,28 @@
 // Canvas setup
-// eslint-disable-next-line no-undef
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
-// eslint-disable-next-line no-undef
 canvas.width = window.innerWidth;
-// eslint-disable-next-line no-undef
 canvas.height = window.innerHeight;
 
 const TILE_SIZE = 32;
 const FORMATION_WAIT_PERCENTAGE = 0.95;
+const FORMATION_OBSTACLE_AVOIDANCE_DISTANCE = 15;
 const FORMATION_SPEED_BOOST_RANGE = 10 * TILE_SIZE;
 const FORMATION_CHASING_SPEED_BOOST = 1.5;
 const HIT_THRESHOLD = 5;
-const FORMATION_UNIT_DISTANCE = 50
-const FORMATION_PIECE_DISTANCE  = 100
+const FORMATION_UNIT_DISTANCE = 20
+const FORMATION_PIECE_DISTANCE  = 15
+
+// Stance enum - available to all classes
+const Stance = {
+    STANDING: 'standing',
+    MOVING: 'moving',
+    MOVING_IN_FORMATION: 'moving in formation',
+    CHASING_A_FORMATION: 'chasing a formation',
+    CHASING_A_TARGET: 'chasing a target',
+    ATTACKING_AT_PLACE: 'attacking at place',
+    STRIKING: 'striking'
+};
 
 class AStar {
     constructor() {
@@ -150,7 +159,6 @@ class AStar {
             }
         }
 
-        // No path found
         return null;
     }
 
@@ -214,16 +222,6 @@ const game = {
     team2Color: '#ff4444'
 };
 
-// Stance enum - available to all classes
-const Stance = {
-    STANDING: 'standing',
-    MOVING: 'moving',
-    MOVING_IN_FORMATION: 'moving in formation',
-    CHASING_A_FORMATION: 'chasing a formation',
-    CHASING_A_TARGET: 'chasing a target',
-    ATTACKING_AT_PLACE: 'attacking at place',
-    STRIKING: 'striking'
-};
 
 // Base Unit class
 class Unit {
@@ -252,8 +250,6 @@ class Unit {
         this.formation = null;
         this.formationPosition = null;
         this.formationOrder = 0; // Default value, will be overridden by child classes
-        this.speedBoost = 1;
-        this.stance = Stance.STANDING;
 
         // For pathfinding
         this.path = null;
@@ -311,7 +307,7 @@ class Unit {
                 const dist = Math.sqrt(dx * dx + dy * dy);
 
                 if (dist > 2) {
-                    let currentSpeed = this.moveSpeed * this.speedBoost;
+                    let currentSpeed = this.moveSpeed;
 
                     // If in formation, use formation speed
                     if (this.formation.isMoving) {
@@ -330,14 +326,58 @@ class Unit {
                         }
                     }
 
-                    const moveX = (dx / dist) * currentSpeed;
-                    const moveY = (dy / dist) * currentSpeed;
+                    let moveX = (dx / dist) * currentSpeed;
+                    let moveY = (dy / dist) * currentSpeed;
 
-                    // Check collision with obstacles
+                    // **NEW: Check for obstacles ahead and adjust target toward center**
+                    const targetPosX = this.x + moveX;
+                    const targetPosY = this.y + moveY;
+                    
+                    // Check if we're approaching an obstacle
+                    let obstacleAhead = false;
+                    for (let obstacle of game.obstacles) {
+                        // Ray check from current position to target position with full unit radius
+                        const startDist = this.getDistanceToObstacle(obstacle, this.x, this.y);
+                        const endDist = this.getDistanceToObstacle(obstacle, targetPosX, targetPosY);
+                        
+                        if (startDist < FORMATION_OBSTACLE_AVOIDANCE_DISTANCE || 
+                            endDist < FORMATION_OBSTACLE_AVOIDANCE_DISTANCE) {
+                            obstacleAhead = true;
+                            break;
+                        }
+                    }
+                    
+                    // If obstacle detected, shift target toward formation center
+                    if (obstacleAhead && this.formation) {
+                        const centerX = this.formation.targetX;
+                        const centerY = this.formation.targetY;
+                        
+                        // Calculate direction toward center
+                        const toCenterX = centerX - this.x;
+                        const toCenterY = centerY - this.y;
+                        const toCenterDist = Math.sqrt(toCenterX * toCenterX + toCenterY * toCenterY);
+                        
+                        if (toCenterDist > 0) {
+                            // Blend current movement with movement toward center
+                            const blendFactor = 0.5; // Adjust this to control how much to move toward center
+                            moveX = moveX * (1 - blendFactor) + (toCenterX / toCenterDist) * currentSpeed * blendFactor;
+                            moveY = moveY * (1 - blendFactor) + (toCenterY / toCenterDist) * currentSpeed * blendFactor;
+                        }
+                    }
+
                     const newX = this.x + moveX;
                     const newY = this.y + moveY;
 
-                    if (!this.checkObstacleCollision(newX, newY)) {
+                    // Final check: never get closer than half a tile
+                    let tooClose = false;
+                    for (let obstacle of game.obstacles) {
+                        if (this.getDistanceToObstacle(obstacle, newX, newY) < TILE_SIZE / 2) {
+                            tooClose = true;
+                            break;
+                        }
+                    }
+
+                    if (!tooClose && !this.checkObstacleCollision(newX, newY)) {
                         const repulsion = this.calculateRepulsion();
                         this.x = newX + repulsion.x;
                         this.y = newY + repulsion.y;
@@ -355,6 +395,23 @@ class Unit {
         } else {
             this.moving = false;
         }
+
+
+
+
+    }
+
+    getDistanceToObstacle(obstacle, x, y) {
+        // Calculate distance from unit center (including radius) to obstacle edges
+        const closestX = Math.max(obstacle.x, Math.min(x, obstacle.x + TILE_SIZE));
+        const closestY = Math.max(obstacle.y, Math.min(y, obstacle.y + TILE_SIZE));
+        
+        const dx = x - closestX;
+        const dy = y - closestY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        // Return distance accounting for unit radius
+        return dist - this.radius;
     }
 
     performAttack() {
@@ -455,7 +512,7 @@ class Unit {
         let dist = Math.sqrt(dx * dx + dy * dy);
 
         const isFinalWaypoint = (this.currentPathIndex === this.path.length - 1);
-        const currentSpeed = this.moveSpeed * this.speedBoost;
+        const currentSpeed = this.moveSpeed;
 
         // If we're exactly on the waypoint already
         if (dist === 0) {
@@ -466,7 +523,7 @@ class Unit {
             return;
         }
 
-        // -- FINAL waypoint: handle separately and return (no fall-through) --
+
         if (isFinalWaypoint) {
             const SNAP_TOLERANCE = 2; // pixels
 
@@ -580,6 +637,7 @@ class Unit {
         ctx.restore();
     }
 }
+
 class Formation {
     constructor(units, targetX, targetY) {
         this.allUnits = units; // Keep reference to all original units
@@ -598,43 +656,26 @@ class Formation {
         this.angle = Math.atan2(this.offsetY, this.offsetX);
         this.dir = { x: this.offsetX / this.dist, y: this.offsetY / this.dist };
 
-        // Link units back to formation
         units.forEach(unit => {
             unit.formation = this;
             unit.inFormation = true;
             if ('facing' in unit) unit.facing = this.angle;
         });
-        // Calculate slowest speed (only from units still in formation)
-        this.recalculateSpeed();
+        this.speed = Math.min(...units.map(u => u.moveSpeed));
 
         // Assign formation positions ONCE (never recalculate)
         this.assignFormationPositions();
 
     }
 
-    recalculateSpeed() {
-        const activeUnits = this.allUnits.filter(u => u.inFormation);
-        if (activeUnits.length > 0) {
-            this.speed = Math.min(...activeUnits.map(u => u.moveSpeed));
-        }
-    }
-
     rotateLocal(x, y) {
-        // Rotate 90° counter-clockwise from standard orientation
-        // In local space: +X points in movement direction (right)
-        //                 +Y points perpendicular (up/left from movement perspective)
-        // We need to rotate our local coords to world space
         const c = Math.cos(this.angle), s = Math.sin(this.angle);
-        
-        // Standard rotation, but local X becomes world forward direction
-        // Local: X=forward (movement dir), Y=lateral (perpendicular)
         return { 
             x: x * c - y * s, 
             y: x * s + y * c 
         };
     }
 
-    // Calculate units per row based on total count
     getUnitsPerRow(totalUnits) {
         if (totalUnits <= 18) return 6;
         if (totalUnits <= 30) return 10;
@@ -753,13 +794,6 @@ class Formation {
         });
     }
 
-    // Remove unit from formation (when given other orders)
-    removeUnit(unit) {
-        unit.inFormation = false;
-        unit.formation = null;
-        this.recalculateSpeed();
-    }
-
     // Get only units still in formation
     getActiveUnits() {
         return this.allUnits.filter(u => u.inFormation);
@@ -800,25 +834,6 @@ class Formation {
 
             if ('facing' in unit) unit.facing = this.angle;
         });
-    }
-
-    // Call this in your game loop for each unit
-    updateUnitSpeed(unit) {
-        if (!unit.inFormation || !unit.formationPosition) {
-            return unit.moveSpeed; // Not in formation, use normal speed
-        }
-
-        const dx = unit.x - unit.formationPosition.x;
-        const dy = unit.y - unit.formationPosition.y;
-        const distToSlot = Math.hypot(dx, dy);
-
-        if (distToSlot > 10) {
-            // Unit is out of position, give it boost to catch up
-            return unit.moveSpeed + FORMATION_CHASING_SPEED_BOOST;
-        } else {
-            // Unit is in position, move at formation speed
-            return this.speed;
-        }
     }
 
     draw(ctx) {
@@ -1040,7 +1055,6 @@ class Projectile {
         this.x += this.vx;
         this.y += this.vy;
 
-        // Remove if out of bounds
         if (this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) {
             this.active = false;
         }
