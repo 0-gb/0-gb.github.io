@@ -7,9 +7,9 @@ canvas.height = window.innerHeight;
 // Game constants
 const GRID_SIZE = 20;
 const TILE_SIZE = 32;
-const FORMATION_WAIT_PERCENTAGE = 0.6;
+const FORMATION_WAIT_PERCENTAGE = 0.95;
 const FORMATION_SPEED_BOOST_RANGE = 10 * TILE_SIZE;
-const FORMATION_SPEED_BOOST = 1.5;
+const FORMATION_CHASING_SPEED_BOOST = 1.5;
 const HIT_THRESHOLD = 5;
 
 // A* Pathfinding
@@ -194,7 +194,6 @@ class AStar {
 
 }
 
-
 // Global A* instance
 const pathfinder = new AStar();
 
@@ -219,18 +218,19 @@ const game = {
     team2Color: '#ff4444'
 };
 
+// Stance enum - available to all classes
+const Stance = {
+    STANDING: 'standing',
+    MOVING: 'moving',
+    MOVING_IN_FORMATION: 'moving in formation',
+    CHASING_A_FORMATION: 'chasing a formation',
+    CHASING_A_TARGET: 'chasing a target',
+    ATTACKING_AT_PLACE: 'attacking at place',
+    STRIKING: 'striking'
+};
+
 // Base Unit class
 class Unit {
-    static Stance = {
-        STANDING: 'standing',
-        MOVING: 'moving',
-        MOVING_IN_FORMATION: 'moving in formation',
-        CHASING_A_FORMATION: 'chasing a formation',
-        CHASING_A_TARGET: 'chasing a target',
-        ATTACKING_AT_PLACE: 'attacking at place',
-        STRIKING: 'striking'
-    };
-    
     constructor(x, y, team, type) {
         this.id = generateId();
         this.x = x;
@@ -246,7 +246,7 @@ class Unit {
         this.range = 0;
         this.attackSpeed = 0;
         this.moveSpeed = 0;
-        this.size = 0;
+        this.radius = 0;
         
         this.targetX = x;
         this.targetY = y;
@@ -257,7 +257,7 @@ class Unit {
         this.formation = null;
         this.formationPosition = null;
         this.speedBoost = 1;
-        this.stance = Unit.Stance.STANDING;
+        this.stance = Stance.STANDING;
         
         // For pathfinding
         this.path = null;
@@ -330,7 +330,7 @@ class Unit {
                         );
                         
                         if (formDist > 5 && formDist < FORMATION_SPEED_BOOST_RANGE) {
-                            currentSpeed *= FORMATION_SPEED_BOOST;
+                            currentSpeed *= FORMATION_CHASING_SPEED_BOOST;
                         }
                     }
                     
@@ -390,7 +390,7 @@ class Unit {
             if (other === this) return;
             
             const dist = this.distanceTo(other);
-            const minDist = this.size + other.size;
+            const minDist = this.radius + other.radius;
             
             if (dist < minDist && dist > 0) {
                 // Only repel if the other unit is not attacking
@@ -409,10 +409,10 @@ class Unit {
     
     checkObstacleCollision(x, y) {
         for (let obstacle of game.obstacles) {
-            if (x + this.size > obstacle.x &&
-                x - this.size < obstacle.x + TILE_SIZE &&
-                y + this.size > obstacle.y &&
-                y - this.size < obstacle.y + TILE_SIZE) {
+            if (x + this.radius > obstacle.x &&
+                x - this.radius < obstacle.x + TILE_SIZE &&
+                y + this.radius > obstacle.y &&
+                y - this.radius < obstacle.y + TILE_SIZE) {
                 return true;
             }
         }
@@ -515,23 +515,17 @@ class Unit {
     }
     
     draw(ctx) {
-        // Draw unit
+        // Draw unit as circle
         ctx.save();
         ctx.translate(this.x, this.y);
         
-        // Unit body
+        // Unit body - always draw as circle
         ctx.fillStyle = this.team === 1 ? game.team1Color : game.team2Color;
-        if (this.type === 'catapult') {
-            // Draw catapult as square
-            ctx.fillRect(-this.size, -this.size, this.size * 2, this.size * 2);
-        } else {
-            // Draw other units as circles
-            ctx.beginPath();
-            ctx.arc(0, 0, this.size, 0, Math.PI * 2);
-            ctx.fill();
-        }
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+        ctx.fill();
         
-        // Draw type indicator
+        // Draw type indicator (simplified)
         ctx.fillStyle = 'white';
         ctx.font = '12px Arial';
         ctx.textAlign = 'center';
@@ -545,16 +539,16 @@ class Unit {
             ctx.strokeStyle = '#00ff00';
             ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.arc(0, 0, this.size + 5, 0, Math.PI * 2);
+            ctx.arc(0, 0, this.radius + 5, 0, Math.PI * 2);
             ctx.stroke();
         }
         
         // Draw health bar
         if (this.hp < this.maxHp) {
             ctx.fillStyle = 'red';
-            ctx.fillRect(-this.size, -this.size - 10, this.size * 2, 4);
+            ctx.fillRect(-this.radius, -this.radius - 10, this.radius * 2, 4);
             ctx.fillStyle = 'green';
-            ctx.fillRect(-this.size, -this.size - 10, this.size * 2 * (this.hp / this.maxHp), 4);
+            ctx.fillRect(-this.radius, -this.radius - 10, this.radius * 2 * (this.hp / this.maxHp), 4);
         }
         
         // Draw attack animation
@@ -562,7 +556,7 @@ class Unit {
             ctx.strokeStyle = 'yellow';
             ctx.lineWidth = 3;
             ctx.beginPath();
-            ctx.arc(0, 0, this.size + 10, 0, Math.PI * 2 * (this.attackAnimationTime / this.attackAnimationDuration));
+            ctx.arc(0, 0, this.radius + 10, 0, Math.PI * 2 * (this.attackAnimationTime / this.attackAnimationDuration));
             ctx.stroke();
         }
         
@@ -570,193 +564,6 @@ class Unit {
     }
 }
 
-// Knight class - melee unit
-class Knight extends Unit {
-    constructor(x, y, team) {
-        super(x, y, team, 'knight');
-        this.hp = this.maxHp = 120;
-        this.damage = 25;
-        this.range = 40;
-        this.attackSpeed = 900;
-        this.moveSpeed = 1.4;
-        this.size = 8; // Reduced by half from 16
-    }
-}
-
-// Catapult class - siege unit
-class Catapult extends Unit {
-    constructor(x, y, team) {
-        super(x, y, team, 'catapult');
-        this.hp = this.maxHp = 200;
-        this.damage = 50;
-        this.range = 250;
-        this.attackSpeed = 3000;
-        this.moveSpeed = 0.5;
-        this.size = 10; // Reduced by half from 20
-        
-        // Catapult-specific projectile properties
-        this.projectileSize = 2.5; // Reduced by half from 5
-        this.projectileSpeed = 2;
-    }
-    
-    performAttack() {
-        this.isAttacking = true;
-        this.attackAnimationTime = this.attackAnimationDuration;
-        this.attackCooldown = this.attackSpeed;
-        
-        // Create projectile with catapult-specific properties
-        const projectile = new Projectile(
-            this.x, 
-            this.y,
-            this.attackTarget.x, 
-            this.attackTarget.y,
-            this.damage,
-            this.projectileSize,
-            this.projectileSpeed,
-            this, 
-            this.attackTarget,
-            this.type
-        );
-        game.projectiles.push(projectile);
-    }
-}
-
-// Archer class - ranged unit
-class Archer extends Unit {
-    constructor(x, y, team) {
-        super(x, y, team, 'archer');
-        this.hp = this.maxHp = 80;
-        this.damage = 15;
-        this.range = 150;
-        this.attackSpeed = 1500;
-        this.moveSpeed = 1.0;
-        this.size = 7; // Reduced by half from 14
-        
-        // Archer-specific projectile properties
-        this.projectileSize = 1.5; // Reduced by half from 3
-        this.projectileSpeed = 4;
-    }
-    
-    performAttack() {
-        this.isAttacking = true;
-        this.attackAnimationTime = this.attackAnimationDuration;
-        this.attackCooldown = this.attackSpeed;
-        
-        // Create projectile with archer-specific properties
-        const projectile = new Projectile(
-            this.x, 
-            this.y,
-            this.attackTarget.x, 
-            this.attackTarget.y,
-            this.damage,
-            this.projectileSize,
-            this.projectileSpeed,
-            this, 
-            this.attackTarget,
-            this.type
-        );
-        game.projectiles.push(projectile);
-    }
-}
-
-// Pikeman class - melee unit with anti-cavalry bonus
-class Pikeman extends Unit {
-    constructor(x, y, team) {
-        super(x, y, team, 'pikeman');
-        this.hp = this.maxHp = 100;
-        this.damage = 18;
-        this.range = 40;
-        this.attackSpeed = 1100;
-        this.moveSpeed = 1.1;
-        this.size = 7.5; // Reduced by half from 15
-    }
-    
-    performAttack() {
-        this.isAttacking = true;
-        this.attackAnimationTime = this.attackAnimationDuration;
-        this.attackCooldown = this.attackSpeed;
-        
-        // Pikeman deals bonus damage to cavalry units (Knights)
-        let actualDamage = this.damage;
-        if (this.attackTarget && this.attackTarget.type === 'knight') {
-            actualDamage *= 1.5; // 50% bonus damage vs cavalry
-        }
-        
-        // Melee always hits
-        this.attackTarget.takeDamage(actualDamage);
-    }
-}
-
-// Projectile class
-class Projectile {
-    constructor(x, y, targetX, targetY, damage, size, speed, shooterUnit, targetUnit, damageType) {
-        this.x = x;
-        this.y = y;
-        this.damage = damage;
-        this.size = size;
-        this.speed = speed;
-        this.targetX = targetX
-        this.targetY = targetY
-        this.shooterUnit = shooterUnit
-        this.targetUnit = targetUnit
-        this.damageType = damageType
-
-        const dx = this.targetX - x;
-        const dy = this.targetY - y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        this.vx = (dx / dist) * speed;
-        this.vy = (dy / dist) * speed;
-        
-        this.active = true;
-    }
-    
-    update() {
-        if (!this.active) return;
-        
-        this.x += this.vx;
-        this.y += this.vy;
-
-        // Remove if out of bounds
-        if (this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) {
-            this.active = false;
-        }
-        let xdif = this.targetX - this.x
-        if(this.vx < 0)
-            xdif = this.x - this.targetX
-        let ydif = this.targetY - this.y
-        if(this.vy < 0)
-            ydif = this.y - this.targetY
-        if (xdif <= HIT_THRESHOLD && ydif <= HIT_THRESHOLD){
-                this.active = false;
-                
-                // Check damage type to determine damage behavior
-                if (this.damageType === 'catapult') {
-                    // Catapult: damage all units in impact area
-                    const impactRadius = this.size * 4; // Area of effect radius
-                    game.units.forEach(unit => {
-                        const dist = Math.sqrt(Math.pow(this.x - unit.x, 2) + Math.pow(this.y - unit.y, 2));
-                        if (dist < impactRadius && unit !== this.shooterUnit) {
-                            unit.takeDamage(this.damage);
-                        }
-                    });
-                } else {
-                    // Archer: single target damage (original logic)
-                const dist = Math.sqrt(Math.pow(this.x - this.targetUnit.x, 2) + Math.pow(this.y - this.targetUnit.y, 2));
-                if(dist < this.targetUnit.size)
-                    this.targetUnit.takeDamage(this.damage);
-                }
-            }
-      
-    }
-    
-    draw(ctx) {
-        if (!this.active) return;
-        ctx.fillStyle = 'orange';
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-        ctx.fill();
-    }
-}
 
 // Formation class
 class Formation {
@@ -835,6 +642,197 @@ class Formation {
         });
     }
 }
+
+
+// Knight class - melee unit
+class Knight extends Unit {
+    constructor(x, y, team) {
+        super(x, y, team, 'knight');
+        this.hp = this.maxHp = 120;
+        this.damage = 25;
+        this.range = 40;
+        this.attackSpeed = 900;
+        this.moveSpeed = 1.4;
+        this.radius = 8; // Reduced by half from 16
+    }
+}
+
+// Catapult class - siege unit
+class Catapult extends Unit {
+    constructor(x, y, team) {
+        super(x, y, team, 'catapult');
+        this.hp = this.maxHp = 200;
+        this.damage = 50;
+        this.range = 250;
+        this.attackSpeed = 3000;
+        this.moveSpeed = 0.5;
+        this.radius = 10; // Reduced by half from 20
+        
+        // Catapult-specific projectile properties
+        this.projectileSize = 2.5; // Reduced by half from 5
+        this.projectileSpeed = 2;
+    }
+    
+    performAttack() {
+        this.isAttacking = true;
+        this.attackAnimationTime = this.attackAnimationDuration;
+        this.attackCooldown = this.attackSpeed;
+        
+        // Create projectile with catapult-specific properties
+        const projectile = new Projectile(
+            this.x, 
+            this.y,
+            this.attackTarget.x, 
+            this.attackTarget.y,
+            this.damage,
+            this.projectileSize,
+            this.projectileSpeed,
+            this, 
+            this.attackTarget,
+            this.type
+        );
+        game.projectiles.push(projectile);
+    }
+}
+
+// Archer class - ranged unit
+class Archer extends Unit {
+    constructor(x, y, team) {
+        super(x, y, team, 'archer');
+        this.hp = this.maxHp = 80;
+        this.damage = 15;
+        this.range = 150;
+        this.attackSpeed = 1500;
+        this.moveSpeed = 1.0;
+        this.radius = 7; // Reduced by half from 14
+        
+        // Archer-specific projectile properties
+        this.projectileSize = 1.5; // Reduced by half from 3
+        this.projectileSpeed = 4;
+    }
+    
+    performAttack() {
+        this.isAttacking = true;
+        this.attackAnimationTime = this.attackAnimationDuration;
+        this.attackCooldown = this.attackSpeed;
+        
+        // Create projectile with archer-specific properties
+        const projectile = new Projectile(
+            this.x, 
+            this.y,
+            this.attackTarget.x, 
+            this.attackTarget.y,
+            this.damage,
+            this.projectileSize,
+            this.projectileSpeed,
+            this, 
+            this.attackTarget,
+            this.type
+        );
+        game.projectiles.push(projectile);
+    }
+}
+
+// Pikeman class - melee unit with anti-cavalry bonus
+class Pikeman extends Unit {
+    constructor(x, y, team) {
+        super(x, y, team, 'pikeman');
+        this.hp = this.maxHp = 100;
+        this.damage = 18;
+        this.range = 40;
+        this.attackSpeed = 1100;
+        this.moveSpeed = 1.1;
+        this.radius = 7.5; // Reduced by half from 15
+    }
+    
+    performAttack() {
+        this.isAttacking = true;
+        this.attackAnimationTime = this.attackAnimationDuration;
+        this.attackCooldown = this.attackSpeed;
+        
+        // Pikeman deals bonus damage to cavalry units (Knights)
+        let actualDamage = this.damage;
+        if (this.attackTarget && this.attackTarget.type === 'knight') {
+            actualDamage *= 1.5; // 50% bonus damage vs cavalry
+        }
+        
+        // Melee always hits
+        this.attackTarget.takeDamage(actualDamage);
+    }
+}
+
+
+// Projectile class
+class Projectile {
+    constructor(x, y, targetX, targetY, damage, size, speed, shooterUnit, targetUnit, damageType) {
+        this.x = x;
+        this.y = y;
+        this.damage = damage;
+        this.size = size;
+        this.speed = speed;
+        this.targetX = targetX
+        this.targetY = targetY
+        this.shooterUnit = shooterUnit
+        this.targetUnit = targetUnit
+        this.damageType = damageType
+
+        const dx = this.targetX - x;
+        const dy = this.targetY - y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        this.vx = (dx / dist) * speed;
+        this.vy = (dy / dist) * speed;
+        
+        this.active = true;
+    }
+    
+    update() {
+        if (!this.active) return;
+        
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Remove if out of bounds
+        if (this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) {
+            this.active = false;
+        }
+        let xdif = this.targetX - this.x
+        if(this.vx < 0)
+            xdif = this.x - this.targetX
+        let ydif = this.targetY - this.y
+        if(this.vy < 0)
+            ydif = this.y - this.targetY
+        if (xdif <= HIT_THRESHOLD && ydif <= HIT_THRESHOLD){
+                this.active = false;
+                
+                // Check damage type to determine damage behavior
+                if (this.damageType === 'catapult') {
+                    // Catapult: damage all units in impact area
+                    const impactRadius = this.size * 4; // Area of effect radius
+                    game.units.forEach(unit => {
+                        const dist = Math.sqrt(Math.pow(this.x - unit.x, 2) + Math.pow(this.y - unit.y, 2));
+                        if (dist < impactRadius && unit !== this.shooterUnit) {
+                            unit.takeDamage(this.damage);
+                        }
+                    });
+                } else {
+                // Archer: single target damage (original logic)
+                const dist = Math.sqrt(Math.pow(this.x - this.targetUnit.x, 2) + Math.pow(this.y - this.targetUnit.y, 2));
+                if(dist < this.targetUnit.radius)
+                    this.targetUnit.takeDamage(this.damage);
+                }
+            }
+      
+    }
+    
+    draw(ctx) {
+        if (!this.active) return;
+        ctx.fillStyle = 'orange';
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
 
 // Draw grid function
 function drawGrid() {
@@ -1020,7 +1018,7 @@ document.addEventListener('keydown', (e) => {
 function getUnitAt(x, y) {
     for (let unit of game.units) {
         const dist = Math.sqrt(Math.pow(x - unit.x, 2) + Math.pow(y - unit.y, 2));
-        if (dist < unit.size) {
+        if (dist < unit.radius) {
             return unit;
         }
     }
