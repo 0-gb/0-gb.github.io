@@ -12,6 +12,7 @@ const FORMATION_CHASING_SPEED_BOOST = 1.5;
 const HIT_THRESHOLD = 5;
 const FORMATION_UNIT_DISTANCE = 20
 const FORMATION_PIECE_DISTANCE  = 15
+const MIN_RANGE_BUFFER = 20
 
 // Stance enum - available to all classes
 const Stance = {
@@ -236,7 +237,7 @@ class Unit {
         this.hp = 0;
         this.maxHp = 0;
         this.damage = 0;
-        this.range = 0;
+        this.maxRange = 0;
         this.attackSpeed = 0;
         this.moveSpeed = 0;
         this.radius = 0;
@@ -278,20 +279,68 @@ class Unit {
         if (this.attackTarget && this.attackTarget.hp > 0) {
             const dist = this.distanceTo(this.attackTarget);
 
-            if (dist <= this.range) {
+            // Check if we're in the valid attack range (not too close, not too far)
+            const tooClose = this.minRange && dist < this.minRange;
+            const tooFar = dist > this.maxRange;
+            const inRange = !tooClose && !tooFar;
+
+            if (inRange) {
                 // In range, stop and attack
                 this.moving = false;
+                this.path = null; // Clear path when in range
                 this.targetX = this.x;
                 this.targetY = this.y;
 
                 if (this.attackCooldown <= 0 && !this.isAttacking) {
                     this.performAttack();
                 }
+            } else if (tooClose) {
+                // TOO CLOSE - need to back away from target
+                // Calculate a position that's at safe distance from target
+                const dx = this.x - this.attackTarget.x;
+                const dy = this.y - this.attackTarget.y;
+                const angle = Math.atan2(dy, dx);
+                
+                // Move to a position at minRange + some buffer
+                const safeDistance = this.minRange + MIN_RANGE_BUFFER;
+                const retreatX = this.attackTarget.x + Math.cos(angle) * safeDistance;
+                const retreatY = this.attackTarget.y + Math.sin(angle) * safeDistance;
+                
+                // Check if we need to recalculate retreat path
+                const needsNewPath = !this.path || 
+                                    this.currentPathIndex >= this.path.length ||
+                                    Math.abs(this.targetX - retreatX) > TILE_SIZE / 2 ||
+                                    Math.abs(this.targetY - retreatY) > TILE_SIZE / 2;
+                
+                if (needsNewPath) {
+                    this.targetX = retreatX;
+                    this.targetY = retreatY;
+                    
+                    if (!this.formation) {
+                        this.setPath(retreatX, retreatY);
             } else {
-                // Move towards target
+                        this.moving = true;
+                    }
+                }
+            } else if (tooFar) {
+                // TOO FAR - need to move towards target
+                // Check if we need to recalculate path (target moved or no path exists)
+                const needsNewPath = !this.path || 
+                                    this.currentPathIndex >= this.path.length ||
+                                    Math.abs(this.targetX - this.attackTarget.x) > TILE_SIZE / 2 ||
+                                    Math.abs(this.targetY - this.attackTarget.y) > TILE_SIZE / 2;
+                
+                if (needsNewPath) {
                 this.targetX = this.attackTarget.x;
                 this.targetY = this.attackTarget.y;
+                    
+                    // Use pathfinding for non-formation units, direct movement for formation units
+                    if (!this.formation) {
+                        this.setPath(this.attackTarget.x, this.attackTarget.y);
+                    } else {
                 this.moving = true;
+                    }
+                }
             }
         } else if (this.attackTarget && this.attackTarget.hp <= 0) {
             this.attackTarget = null;
@@ -844,7 +893,7 @@ class Knight extends Unit {
         super(x, y, team, 'knight');
         this.hp = this.maxHp = 120;
         this.damage = 25;
-        this.range = 40;
+        this.maxRange = 40;
         this.attackSpeed = 900;
         this.moveSpeed = 1.4;
         this.radius = 8; // Reduced by half from 16
@@ -858,7 +907,8 @@ class Catapult extends Unit {
         super(x, y, team, 'catapult');
         this.hp = this.maxHp = 200;
         this.damage = 50;
-        this.range = 250;
+        this.maxRange = 250;
+        this.minRange = 50;
         this.attackSpeed = 3000;
         this.moveSpeed = 0.5;
         this.radius = 10; // Reduced by half from 20
@@ -897,7 +947,7 @@ class Archer extends Unit {
         super(x, y, team, 'archer');
         this.hp = this.maxHp = 80;
         this.damage = 15;
-        this.range = 150;
+        this.maxRange = 150;
         this.attackSpeed = 1500;
         this.moveSpeed = 1.0;
         this.radius = 7; // Reduced by half from 14
@@ -936,7 +986,7 @@ class Pikeman extends Unit {
         super(x, y, team, 'pikeman');
         this.hp = this.maxHp = 100;
         this.damage = 18;
-        this.range = 40;
+        this.maxRange = 40;
         this.attackSpeed = 1100;
         this.moveSpeed = 1.1;
         this.radius = 7.5; // Reduced by half from 15
