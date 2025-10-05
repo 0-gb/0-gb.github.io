@@ -13,6 +13,7 @@ const HIT_THRESHOLD = 5;
 const FORMATION_UNIT_DISTANCE = 20
 const FORMATION_PIECE_DISTANCE  = 15
 const MIN_RANGE_BUFFER = 20
+const OBSTACLE_COUNT = 20
 
 // Stance enum - available to all classes
 const Stance = {
@@ -295,18 +296,14 @@ class Unit {
                     this.performAttack();
                 }
             } else if (tooClose) {
-                // TOO CLOSE - need to back away from target
-                // Calculate a position that's at safe distance from target
                 const dx = this.x - this.attackTarget.x;
                 const dy = this.y - this.attackTarget.y;
                 const angle = Math.atan2(dy, dx);
                 
-                // Move to a position at minRange + some buffer
                 const safeDistance = this.minRange + MIN_RANGE_BUFFER;
                 const retreatX = this.attackTarget.x + Math.cos(angle) * safeDistance;
                 const retreatY = this.attackTarget.y + Math.sin(angle) * safeDistance;
                 
-                // Check if we need to recalculate retreat path
                 const needsNewPath = !this.path || 
                                     this.currentPathIndex >= this.path.length ||
                                     Math.abs(this.targetX - retreatX) > TILE_SIZE / 2 ||
@@ -323,8 +320,6 @@ class Unit {
                     }
                 }
             } else if (tooFar) {
-                // TOO FAR - need to move towards target
-                // Check if we need to recalculate path (target moved or no path exists)
                 const needsNewPath = !this.path || 
                                     this.currentPathIndex >= this.path.length ||
                                     Math.abs(this.targetX - this.attackTarget.x) > TILE_SIZE / 2 ||
@@ -334,7 +329,6 @@ class Unit {
                 this.targetX = this.attackTarget.x;
                 this.targetY = this.attackTarget.y;
                     
-                    // Use pathfinding for non-formation units, direct movement for formation units
                     if (!this.formation) {
                         this.setPath(this.attackTarget.x, this.attackTarget.y);
                     } else {
@@ -346,11 +340,8 @@ class Unit {
             this.attackTarget = null;
         }
 
-        // Movement
         if (this.moving && !this.isAttacking) {
-            // Use A* pathfinding for single units, old movement for formations
             if (this.formation) {
-                // Formation movement (old system)
                 const dx = this.targetX - this.x;
                 const dy = this.targetY - this.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
@@ -358,12 +349,10 @@ class Unit {
                 if (dist > 2) {
                     let currentSpeed = this.moveSpeed;
 
-                    // If in formation, use formation speed
                     if (this.formation.isMoving) {
                         currentSpeed = this.formation.speed;
                     }
 
-                    // Check distance to formation position for speed boost
                     if (this.formationPosition) {
                         const formDist = Math.sqrt(
                             Math.pow(this.x - this.formationPosition.x, 2) +
@@ -444,9 +433,7 @@ class Unit {
             }
         });
 
-        // Repel from obstacles (immovable objects)
         game.obstacles.forEach(obstacle => {
-            // Calculate distance from unit center to obstacle edges
             const closestX = Math.max(obstacle.x, Math.min(this.x, obstacle.x + TILE_SIZE));
             const closestY = Math.max(obstacle.y, Math.min(this.y, obstacle.y + TILE_SIZE));
             
@@ -1106,7 +1093,7 @@ function drawGrid() {
 // Initialize game
 function init() {
     // Create obstacles aligned to grid
-    for (let i = 0; i < 1; i++) {
+    for (let i = 0; i < OBSTACLE_COUNT; i++) {
         const gridX = Math.floor(Math.random() * (canvas.width / TILE_SIZE)) * TILE_SIZE;
         const gridY = Math.floor(Math.random() * (canvas.height / TILE_SIZE)) * TILE_SIZE;
 
