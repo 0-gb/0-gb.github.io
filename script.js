@@ -329,59 +329,10 @@ class Unit {
                     let moveX = (dx / dist) * currentSpeed;
                     let moveY = (dy / dist) * currentSpeed;
 
-                    // **NEW: Check for obstacles ahead and adjust target toward center**
-                    const targetPosX = this.x + moveX;
-                    const targetPosY = this.y + moveY;
-                    
-                    // Check if we're approaching an obstacle
-                    let obstacleAhead = false;
-                    for (let obstacle of game.obstacles) {
-                        // Ray check from current position to target position with full unit radius
-                        const startDist = this.getDistanceToObstacle(obstacle, this.x, this.y);
-                        const endDist = this.getDistanceToObstacle(obstacle, targetPosX, targetPosY);
-                        
-                        if (startDist < FORMATION_OBSTACLE_AVOIDANCE_DISTANCE || 
-                            endDist < FORMATION_OBSTACLE_AVOIDANCE_DISTANCE) {
-                            obstacleAhead = true;
-                            break;
-                        }
-                    }
-                    
-                    // If obstacle detected, shift target toward formation center
-                    if (obstacleAhead && this.formation) {
-                        const centerX = this.formation.targetX;
-                        const centerY = this.formation.targetY;
-                        
-                        // Calculate direction toward center
-                        const toCenterX = centerX - this.x;
-                        const toCenterY = centerY - this.y;
-                        const toCenterDist = Math.sqrt(toCenterX * toCenterX + toCenterY * toCenterY);
-                        
-                        if (toCenterDist > 0) {
-                            // Blend current movement with movement toward center
-                            const blendFactor = 0.5; // Adjust this to control how much to move toward center
-                            moveX = moveX * (1 - blendFactor) + (toCenterX / toCenterDist) * currentSpeed * blendFactor;
-                            moveY = moveY * (1 - blendFactor) + (toCenterY / toCenterDist) * currentSpeed * blendFactor;
-                        }
-                    }
-
                     const newX = this.x + moveX;
                     const newY = this.y + moveY;
-
-                    // Final check: never get closer than half a tile
-                    let tooClose = false;
-                    for (let obstacle of game.obstacles) {
-                        if (this.getDistanceToObstacle(obstacle, newX, newY) < TILE_SIZE / 2) {
-                            tooClose = true;
-                            break;
-                        }
-                    }
-
-                    if (!tooClose && !this.checkObstacleCollision(newX, newY)) {
-                        const repulsion = this.calculateRepulsion();
-                        this.x = newX + repulsion.x;
-                        this.y = newY + repulsion.y;
-                    }
+                    this.x = newX
+                    this.y = newY
                 } else {
                     this.moving = false;
                     if (this.formation && !this.formation.isMoving) {
@@ -395,23 +346,6 @@ class Unit {
         } else {
             this.moving = false;
         }
-
-
-
-
-    }
-
-    getDistanceToObstacle(obstacle, x, y) {
-        // Calculate distance from unit center (including radius) to obstacle edges
-        const closestX = Math.max(obstacle.x, Math.min(x, obstacle.x + TILE_SIZE));
-        const closestY = Math.max(obstacle.y, Math.min(y, obstacle.y + TILE_SIZE));
-        
-        const dx = x - closestX;
-        const dy = y - closestY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        
-        // Return distance accounting for unit radius
-        return dist - this.radius;
     }
 
     performAttack() {
