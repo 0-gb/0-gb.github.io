@@ -13,7 +13,7 @@ const HIT_THRESHOLD = 5;
 const FORMATION_UNIT_DISTANCE = 20
 const FORMATION_PIECE_DISTANCE  = 15
 const MIN_RANGE_BUFFER = 20
-const OBSTACLE_COUNT = 50
+const OBSTACLE_COUNT = 4
 
 // Stance enum - available to all classes
 const Stance = {
@@ -486,7 +486,7 @@ class Unit {
             this.currentPathIndex++;
             return;
         }
-        
+
 
         if (isFinalWaypoint) {
             const SNAP_TOLERANCE = 2; // pixels
@@ -510,20 +510,20 @@ class Unit {
 
             // Check if the new position would collide with obstacles
             if (!this.checkObstacleCollision(newX, newY)) {
-                // If the movement would pass the waypoint (dot product <= 0) — snap to avoid skipping
-                const dot = (targetWaypoint.x - this.x) * (targetWaypoint.x - newX) +
-                    (targetWaypoint.y - this.y) * (targetWaypoint.y - newY);
-                if (dot <= 0) {
-                    this.x = targetWaypoint.x;
-                    this.y = targetWaypoint.y;
-                    this.currentPathIndex++;
-                    this.moving = false;
-                    return;
-                }
+            // If the movement would pass the waypoint (dot product <= 0) — snap to avoid skipping
+            const dot = (targetWaypoint.x - this.x) * (targetWaypoint.x - newX) +
+                (targetWaypoint.y - this.y) * (targetWaypoint.y - newY);
+            if (dot <= 0) {
+                this.x = targetWaypoint.x;
+                this.y = targetWaypoint.y;
+                this.currentPathIndex++;
+                this.moving = false;
+                return;
+            }
 
-                // Otherwise apply the move normally
-                this.x = newX;
-                this.y = newY;
+            // Otherwise apply the move normally
+            this.x = newX;
+            this.y = newY;
             } else {
                 // Collision detected, recalculate path
                 this.setPath(targetWaypoint.x, targetWaypoint.y);
@@ -1235,33 +1235,7 @@ function buildPNodes(touches, centroids) {
         }
     });
 
-    // Helper function to determine direction from current node to neighbor
-    function getDirection(fromR, fromC, toR, toC, id) {
-        const dr = toR - fromR;
-        const dc = toC - fromC;
-        
-        // Check if the difference is valid (only one cell away in one direction)
-        if (Math.abs(dr) + Math.abs(dc) !== 1) {
-            console.warn(`⚠️ WARNING: Invalid neighbor relationship detected!
-                From: (r=${fromR}, c=${fromC}) to (r=${toR}, c=${toC})
-                Delta: dr=${dr}, dc=${dc}
-                Node ID: id=${id}
-                Expected: exactly one of dr or dc should be ±1, the other 0`);
-            return null;
-        }
-        
-        // North: row decreases (going up in grid)
-        if (dr === -1 && dc === 0) return 'N';
-        // South: row increases (going down in grid)
-        if (dr === 1 && dc === 0) return 'S';
-        // East: column increases (going right in grid)
-        if (dr === 0 && dc === 1) return 'E';
-        // West: column decreases (going left in grid)
-        if (dr === 0 && dc === -1) return 'W';
-        return null;
-    }
-
-    // Second pass: assign prev/next preferring 8-neigh continuity and compute directions
+    // Second pass: assign prev/next preferring 8-neigh continuity
     orderedByComp.forEach((cells, cid) => {
         const n = cells.length;
         if (n === 0) return;
@@ -1287,42 +1261,8 @@ function buildPNodes(touches, centroids) {
             const meId   = idOf.get(`${cid}|${keyRC(cells[i][0], cells[i][1])}`);
             const prevId = idOf.get(`${cid}|${keyRC(cells[prevIdx][0], cells[prevIdx][1])}`);
             const nextId = idOf.get(`${cid}|${keyRC(cells[nextIdx][0], cells[nextIdx][1])}`);
-            
             pNodes[meId].prevId = prevId;
             pNodes[meId].nextId = nextId;
-
-            // ADDED: Compute and store valid directions
-            const currentR = cells[i][0];
-            const currentC = cells[i][1];
-            const directions = [];
-
-            // Check direction to prev neighbor
-            if (prevIdx !== -1) {
-                const prevR = cells[prevIdx][0];
-                const prevC = cells[prevIdx][1];
-                const dirToPrev = getDirection(currentR, currentC, prevR, prevC, meId);
-                if (dirToPrev) {
-                    directions.push(dirToPrev);
-                }
-            }
-
-            // Check direction to next neighbor
-            if (nextIdx !== -1) {
-                const nextR = cells[nextIdx][0];
-                const nextC = cells[nextIdx][1];
-                const dirToNext = getDirection(currentR, currentC, nextR, nextC, meId);
-                if (dirToNext) {
-                    directions.push(dirToNext);
-                }
-            }
-
-            // Remove duplicates (in case prev and next are in same direction, though unlikely)
-            pNodes[meId].directions = [...new Set(directions)];
-
-            // Additional validation: nodes on map edge may have only one neighbor
-            if (pNodes[meId].directions.length === 0) {
-                console.warn(`⚠️ WARNING: Node ${meId} at (r=${currentR}, c=${currentC}) has no valid directions!`);
-            }
         }
     });
 
@@ -1353,6 +1293,10 @@ function computePerimeterData() {
     game.pathMask = pathMask;
     game.pathCells = pathCells;
     game.pNodes = pNodes;
+    game.clean_node_positions = getUniquePNodePositions()
+    game.clean_node_positions = findAdjacentNodes(game.clean_node_positions)
+    
+
 
     // Optional: peek at some nodes in console
     console.log(`Perimeter computed: clusters=${compCount}, pNodes=${pNodes.length}`);
@@ -1370,6 +1314,65 @@ function drawPathOverlay() {
         ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
     }
     ctx.restore();
+}
+
+// Get unique row-column pairs from pNodes, excluding obstacle positions
+function getUniquePNodePositions() {
+    if (!game.pNodes || game.pNodes.length === 0) return [];
+    
+    const uniquePositions = new Set();
+    const result = [];
+    
+    for (const node of game.pNodes) {
+        const key = keyRC(node.r, node.c);
+        
+        // Check if this position is not an obstacle
+        const isObstacle = game.obstacleSet.has(key);
+        
+        if (!uniquePositions.has(key) && !isObstacle) {
+            uniquePositions.add(key);
+            result.push({ r: node.r, c: node.c });
+        }
+    }
+    
+    return result;
+}
+
+// Find adjacent nodes for each node in clean_node_positions and store them
+function findAdjacentNodes(clean_node_positions) {
+    if (!clean_node_positions || clean_node_positions.length === 0) return [];
+    
+    // Create a map for quick lookup of nodes by position
+    const positionMap = new Map();
+    clean_node_positions.forEach((node, index) => {
+        const key = keyRC(node.r, node.c);
+        positionMap.set(key, { node, index });
+    });
+    
+    // Define 8-direction neighbors
+    const directions = [
+        [-1, 0],
+        [0, -1],           [0, 1],
+         [1, 0]
+    ];
+    
+    // For each node, find adjacent nodes
+    clean_node_positions.forEach(node => {
+        node.adjacentNodes = [];
+        
+        for (const [dr, dc] of directions) {
+            const adjR = node.r + dr;
+            const adjC = node.c + dc;
+            const adjKey = keyRC(adjR, adjC);
+            
+            if (positionMap.has(adjKey)) {
+                const adjacentNode = positionMap.get(adjKey).node;
+                node.adjacentNodes.push(adjacentNode);
+            }
+        }
+    });
+    
+    return clean_node_positions;
 }
 
 
