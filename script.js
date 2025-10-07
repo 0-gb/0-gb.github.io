@@ -13,7 +13,7 @@ const HIT_THRESHOLD = 5;
 const FORMATION_UNIT_DISTANCE = 20
 const FORMATION_PIECE_DISTANCE  = 15
 const MIN_RANGE_BUFFER = 20
-const OBSTACLE_COUNT = 20
+const OBSTACLE_COUNT = 50
 
 // Stance enum - available to all classes
 const Stance = {
@@ -208,22 +208,6 @@ class AStar {
 
 // Global A* instance
 const pathfinder = new AStar();
-
-// Game state
-const game = {
-    camera: { x: 0, y: 0 },
-    selectedUnits: [],
-    units: [],
-    obstacles: [],
-    projectiles: [],
-    mousePos: { x: 0, y: 0 },
-    dragStart: null,
-    isDragging: false,
-    keys: {},
-    team1Color: '#4444ff',
-    team2Color: '#ff4444'
-};
-
 
 // Base Unit class
 class Unit {
@@ -1068,6 +1052,241 @@ class Projectile {
 }
 
 
+// Game state
+const game = {
+    camera: { x: 0, y: 0 },
+    selectedUnits: [],
+    units: [],
+    obstacles: [],
+    projectiles: [],
+    mousePos: { x: 0, y: 0 },
+    dragStart: null,
+    isDragging: false,
+    keys: {},
+    team1Color: '#4444ff',
+    team2Color: '#ff4444',
+
+    // ADDED: perimeter/path data
+    pNodes: [],          // Array of p-nodes [{id, r, c, x, y, clusterId, prevId, nextId}]
+    pathCells: [],       // Array of [r, c] for every perimeter cell
+    pathMask: [],        // 2D boolean grid for quick lookup/visualization
+    compGrid: [],        // 2D component ID grid (0 = free, >0 = obstacle cluster id)
+    compCount: 0,        // Number of obstacle clusters
+    obstacleSet: new Set() // Set of "r,c" for obstacle tiles
+};
+
+// ADDED: helpers and perimeter computation
+const DIR4 = [[-1,0],[1,0],[0,-1],[0,1]];
+const DIR8 = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+
+function inBounds(r, c, rows, cols) {
+    return r >= 0 && c >= 0 && r < rows && c < cols;
+}
+function keyRC(r, c) {
+    return `${r},${c}`;
+}
+function parseKey(k) {
+    const [r, c] = k.split(',').map(Number);
+    return [r, c];
+}
+function adjacent8(a, b) {
+    return Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])) === 1;
+}
+function gridSize() {
+    const rows = Math.floor(canvas.height / TILE_SIZE);
+    const cols = Math.floor(canvas.width / TILE_SIZE);
+    return { rows, cols };
+}
+
+// Label connected obstacle components (4-connected)
+function labelComponents(rows, cols, obstacleSet) {
+    const compGrid = Array.from({ length: rows }, () => Array(cols).fill(0));
+    let compCount = 0;
+    const compStats = new Map(); // cid -> {sr, sc, n}
+
+    obstacleSet.forEach(k => {
+        const [sr, sc] = parseKey(k);
+        if (compGrid[sr][sc] !== 0) return;
+
+        compCount++;
+        compStats.set(compCount, { sr: 0, sc: 0, n: 0 });
+
+        const q = [[sr, sc]];
+        compGrid[sr][sc] = compCount;
+
+        while (q.length) {
+            const [r, c] = q.shift();
+            const stat = compStats.get(compCount);
+            stat.sr += r; stat.sc += c; stat.n += 1;
+
+            for (const [dr, dc] of DIR4) {
+                const rr = r + dr, cc = c + dc;
+                if (!inBounds(rr, cc, rows, cols)) continue;
+                if (!obstacleSet.has(keyRC(rr, cc))) continue;
+                if (compGrid[rr][cc] !== 0) continue;
+                compGrid[rr][cc] = compCount;
+                q.push([rr, cc]);
+            }
+        }
+    });
+
+    return { compGrid, compCount, compStats };
+}
+
+function computeCentroids(compStats) {
+    const centroids = new Map(); // cid -> {r, c}
+    compStats.forEach((stat, cid) => {
+        centroids.set(cid, { r: stat.sr / stat.n, c: stat.sc / stat.n });
+    });
+    return centroids;
+}
+
+// Build path mask for free tiles that touch obstacle(s) (8-neigh), and which cluster(s) they touch
+function buildPathMask(rows, cols, compGrid) {
+    const pathMask = Array.from({ length: rows }, () => Array(cols).fill(false));
+    const pathCells = [];
+    const touches = new Map(); // cid -> Set("r,c")
+
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            if (compGrid[r][c] > 0) continue; // obstacle cell
+
+            const neighComps = new Set();
+            for (const [dr, dc] of DIR8) {
+                const rr = r + dr, cc = c + dc;
+                if (!inBounds(rr, cc, rows, cols)) continue;
+                const cid = compGrid[rr][cc];
+                if (cid > 0) neighComps.add(cid);
+            }
+            if (neighComps.size > 0) {
+                pathMask[r][c] = true;
+                pathCells.push([r, c]);
+                neighComps.forEach(cid => {
+                    if (!touches.has(cid)) touches.set(cid, new Set());
+                    touches.get(cid).add(keyRC(r, c));
+                });
+            }
+        }
+    }
+    return { pathMask, pathCells, touches };
+}
+
+// Build ordered p-nodes with prev/next around each component
+function buildPNodes(touches, centroids) {
+    const pNodes = [];
+    const idOf = new Map(); // `${cid}|r,c` -> nodeId
+
+    // First pass: create nodes sorted by angle around obstacle centroid
+    const orderedByComp = new Map(); // cid -> [[r,c], ...]
+
+    touches.forEach((cellSet, cid) => {
+        if (!centroids.has(cid)) return;
+        const center = centroids.get(cid);
+        const cells = Array.from(cellSet).map(parseKey);
+
+        function angle(pos) {
+            const [r, c] = pos;
+            return Math.atan2(r - center.r, c - center.c);
+        }
+        cells.sort((a, b) => angle(a) - angle(b));
+        orderedByComp.set(cid, cells);
+
+        // Create nodes without links first
+        for (const [r, c] of cells) {
+            const id = pNodes.length;
+            idOf.set(`${cid}|${keyRC(r, c)}`, id);
+            pNodes.push({
+                id,
+                r,
+                c,
+                x: c * TILE_SIZE,
+                y: r * TILE_SIZE,
+                clusterId: cid,
+                prevId: null,
+                nextId: null
+            });
+        }
+    });
+
+    // Second pass: assign prev/next preferring 8-neigh continuity
+    orderedByComp.forEach((cells, cid) => {
+        const n = cells.length;
+        if (n === 0) return;
+        const maxScan = Math.min(12, n);
+
+        for (let i = 0; i < n; i++) {
+            // find next
+            let nextIdx = -1;
+            for (let k = 1; k <= maxScan; k++) {
+                const j = (i + k) % n;
+                if (adjacent8(cells[i], cells[j])) { nextIdx = j; break; }
+            }
+            if (nextIdx === -1) nextIdx = (i + 1) % n;
+
+            // find prev
+            let prevIdx = -1;
+            for (let k = 1; k <= maxScan; k++) {
+                const j = (i - k + n) % n;
+                if (adjacent8(cells[i], cells[j])) { prevIdx = j; break; }
+            }
+            if (prevIdx === -1) prevIdx = (i - 1 + n) % n;
+
+            const meId   = idOf.get(`${cid}|${keyRC(cells[i][0], cells[i][1])}`);
+            const prevId = idOf.get(`${cid}|${keyRC(cells[prevIdx][0], cells[prevIdx][1])}`);
+            const nextId = idOf.get(`${cid}|${keyRC(cells[nextIdx][0], cells[nextIdx][1])}`);
+            pNodes[meId].prevId = prevId;
+            pNodes[meId].nextId = nextId;
+        }
+    });
+
+    return pNodes;
+}
+
+// Compute full perimeter data (call after obstacles are placed or changed)
+function computePerimeterData() {
+    const { rows, cols } = gridSize();
+
+    // Build obstacle set from current obstacles
+    const obstacleSet = new Set();
+    for (const obst of game.obstacles) {
+        const r = Math.floor(obst.y / TILE_SIZE);
+        const c = Math.floor(obst.x / TILE_SIZE);
+        if (inBounds(r, c, rows, cols)) obstacleSet.add(keyRC(r, c));
+    }
+
+    const { compGrid, compCount, compStats } = labelComponents(rows, cols, obstacleSet);
+    const centroids = computeCentroids(compStats);
+    const { pathMask, pathCells, touches } = buildPathMask(rows, cols, compGrid);
+    const pNodes = buildPNodes(touches, centroids);
+
+    // Store on game
+    game.obstacleSet = obstacleSet;
+    game.compGrid = compGrid;
+    game.compCount = compCount;
+    game.pathMask = pathMask;
+    game.pathCells = pathCells;
+    game.pNodes = pNodes;
+
+    // Optional: peek at some nodes in console
+    console.log(`Perimeter computed: clusters=${compCount}, pNodes=${pNodes.length}`);
+    if (pNodes.length) {
+        console.log("Sample p-nodes:", pNodes.slice(0, Math.min(10, pNodes.length)));
+    }
+}
+
+// ADDED: render path overlay (free tiles only)
+function drawPathOverlay() {
+    if (!game.pathCells || game.pathCells.length === 0) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(84, 180, 122, 0.35)'; // semi-transparent green
+    for (const [r, c] of game.pathCells) {
+        ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+    }
+    ctx.restore();
+}
+
+
+
 // Draw grid function
 function drawGrid() {
     ctx.strokeStyle = '#444';
@@ -1103,7 +1322,10 @@ function init() {
         });
     }
 
-    // Create initial units using specific classes
+    // ADDED: after placing obstacles, compute perimeter/p-nodes
+    computePerimeterData();
+
+        // Create initial units using specific classes
     for (let j = 0; j < 5; j++) {
         for (let i = 0; i < 5; i++) {
             const unitType = Math.floor(Math.random() * 4);
@@ -1280,6 +1502,9 @@ function gameLoop(currentTime) {
     // Draw grid
     drawGrid();
 
+    // ADDED: draw path overlay (keeps tiles free; purely visual)
+    drawPathOverlay();
+
     // Draw obstacles
     ctx.fillStyle = '#666';
     game.obstacles.forEach(obstacle => {
@@ -1356,4 +1581,7 @@ requestAnimationFrame(gameLoop);
 window.addEventListener('resize', () => {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
+
+    // ADDED: recompute perimeter on resize so grid/p-mask match new size
+    computePerimeterData();
 });
