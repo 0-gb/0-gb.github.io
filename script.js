@@ -353,8 +353,18 @@ class Unit {
 
                     const newX = this.x + moveX;
                     const newY = this.y + moveY;
-                    this.x = newX
-                    this.y = newY
+                    
+                    // Check if the new position would collide with obstacles
+                    if (!this.checkObstacleCollision(newX, newY)) {
+                        this.x = newX;
+                        this.y = newY;
+                    } else {
+                        // Collision detected, stop moving and recalculate path
+                        this.moving = false;
+                        if (this.formation && !this.formation.isMoving) {
+                            this.formation.checkFormationReady();
+                        }
+                    }
                 } else {
                     this.moving = false;
                     if (this.formation && !this.formation.isMoving) {
@@ -476,7 +486,7 @@ class Unit {
             this.currentPathIndex++;
             return;
         }
-
+        
 
         if (isFinalWaypoint) {
             const SNAP_TOLERANCE = 2; // pixels
@@ -498,24 +508,30 @@ class Unit {
             const newX = this.x + moveX + repulsion.x;
             const newY = this.y + moveY + repulsion.y;
 
-            // If the movement would pass the waypoint (dot product <= 0) — snap to avoid skipping
-            const dot = (targetWaypoint.x - this.x) * (targetWaypoint.x - newX) +
-                (targetWaypoint.y - this.y) * (targetWaypoint.y - newY);
-            if (dot <= 0) {
-                this.x = targetWaypoint.x;
-                this.y = targetWaypoint.y;
-                this.currentPathIndex++;
-                this.moving = false;
-                return;
-            }
+            // Check if the new position would collide with obstacles
+            if (!this.checkObstacleCollision(newX, newY)) {
+                // If the movement would pass the waypoint (dot product <= 0) — snap to avoid skipping
+                const dot = (targetWaypoint.x - this.x) * (targetWaypoint.x - newX) +
+                    (targetWaypoint.y - this.y) * (targetWaypoint.y - newY);
+                if (dot <= 0) {
+                    this.x = targetWaypoint.x;
+                    this.y = targetWaypoint.y;
+                    this.currentPathIndex++;
+                    this.moving = false;
+                    return;
+                }
 
-            // Otherwise apply the move normally
-            this.x = newX;
-            this.y = newY;
+                // Otherwise apply the move normally
+                this.x = newX;
+                this.y = newY;
+            } else {
+                // Collision detected, recalculate path
+                this.setPath(targetWaypoint.x, targetWaypoint.y);
+            }
             return; // important: don't fall-through to non-final logic
         }
 
-        // -- NON-final waypoint behavior (unchanged logic) --
+        // -- NON-final waypoint behavior with collision detection --
         if (dist < TILE_SIZE / 2) {
             // reached intermediate waypoint, go to next
             this.currentPathIndex++;
@@ -528,8 +544,18 @@ class Unit {
             const moveX = (dx / dist) * currentSpeed;
             const moveY = (dy / dist) * currentSpeed;
             const repulsion = this.calculateRepulsion();
-            this.x += moveX + repulsion.x;
-            this.y += moveY + repulsion.y;
+            
+            const newX = this.x + moveX + repulsion.x;
+            const newY = this.y + moveY + repulsion.y;
+            
+            // Check if the new position would collide with obstacles
+            if (!this.checkObstacleCollision(newX, newY)) {
+                this.x = newX;
+                this.y = newY;
+            } else {
+                // Collision detected, recalculate path
+                this.setPath(targetWaypoint.x, targetWaypoint.y);
+            }
         }
     }
 
@@ -1203,12 +1229,39 @@ function buildPNodes(touches, centroids) {
                 y: r * TILE_SIZE,
                 clusterId: cid,
                 prevId: null,
-                nextId: null
+                nextId: null,
+                directions: []  // ADDED: array to hold direction enums
             });
         }
     });
 
-    // Second pass: assign prev/next preferring 8-neigh continuity
+    // Helper function to determine direction from current node to neighbor
+    function getDirection(fromR, fromC, toR, toC, id) {
+        const dr = toR - fromR;
+        const dc = toC - fromC;
+        
+        // Check if the difference is valid (only one cell away in one direction)
+        if (Math.abs(dr) + Math.abs(dc) !== 1) {
+            console.warn(`⚠️ WARNING: Invalid neighbor relationship detected!
+                From: (r=${fromR}, c=${fromC}) to (r=${toR}, c=${toC})
+                Delta: dr=${dr}, dc=${dc}
+                Node ID: id=${id}
+                Expected: exactly one of dr or dc should be ±1, the other 0`);
+            return null;
+        }
+        
+        // North: row decreases (going up in grid)
+        if (dr === -1 && dc === 0) return 'N';
+        // South: row increases (going down in grid)
+        if (dr === 1 && dc === 0) return 'S';
+        // East: column increases (going right in grid)
+        if (dr === 0 && dc === 1) return 'E';
+        // West: column decreases (going left in grid)
+        if (dr === 0 && dc === -1) return 'W';
+        return null;
+    }
+
+    // Second pass: assign prev/next preferring 8-neigh continuity and compute directions
     orderedByComp.forEach((cells, cid) => {
         const n = cells.length;
         if (n === 0) return;
@@ -1234,8 +1287,42 @@ function buildPNodes(touches, centroids) {
             const meId   = idOf.get(`${cid}|${keyRC(cells[i][0], cells[i][1])}`);
             const prevId = idOf.get(`${cid}|${keyRC(cells[prevIdx][0], cells[prevIdx][1])}`);
             const nextId = idOf.get(`${cid}|${keyRC(cells[nextIdx][0], cells[nextIdx][1])}`);
+            
             pNodes[meId].prevId = prevId;
             pNodes[meId].nextId = nextId;
+
+            // ADDED: Compute and store valid directions
+            const currentR = cells[i][0];
+            const currentC = cells[i][1];
+            const directions = [];
+
+            // Check direction to prev neighbor
+            if (prevIdx !== -1) {
+                const prevR = cells[prevIdx][0];
+                const prevC = cells[prevIdx][1];
+                const dirToPrev = getDirection(currentR, currentC, prevR, prevC, meId);
+                if (dirToPrev) {
+                    directions.push(dirToPrev);
+                }
+            }
+
+            // Check direction to next neighbor
+            if (nextIdx !== -1) {
+                const nextR = cells[nextIdx][0];
+                const nextC = cells[nextIdx][1];
+                const dirToNext = getDirection(currentR, currentC, nextR, nextC, meId);
+                if (dirToNext) {
+                    directions.push(dirToNext);
+                }
+            }
+
+            // Remove duplicates (in case prev and next are in same direction, though unlikely)
+            pNodes[meId].directions = [...new Set(directions)];
+
+            // Additional validation: nodes on map edge may have only one neighbor
+            if (pNodes[meId].directions.length === 0) {
+                console.warn(`⚠️ WARNING: Node ${meId} at (r=${currentR}, c=${currentC}) has no valid directions!`);
+            }
         }
     });
 
