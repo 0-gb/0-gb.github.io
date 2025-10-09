@@ -807,6 +807,9 @@ class Formation {
             const destX = this.targetX + r.x;
             const destY = this.targetY + r.y;
 
+            // Check if the movement path intersects obstacles
+            this.checkUnitPathObstacles(unit, destX, destY);
+
             unit.targetX = destX;
             unit.targetY = destY;
             unit.formationPosition = { x: destX, y: destY };
@@ -814,6 +817,92 @@ class Formation {
 
             if ('facing' in unit) unit.facing = this.angle;
         });
+    }
+
+    // Check if unit's movement path intersects obstacles
+    checkUnitPathObstacles(unit, destX, destY) {
+        const startX = unit.x;
+        const startY = unit.y;
+        const radius = unit.radius;
+
+        // Get the direction vector of the movement
+        const dx = destX - startX;
+        const dy = destY - startY;
+        const length = Math.sqrt(dx * dx + dy * dy);
+        
+        if (length === 0) return; // No movement
+
+        // Normalize direction
+        const dirX = dx / length;
+        const dirY = dy / length;
+
+        // Calculate perpendicular direction (90 degrees rotated)
+        const perpX = -dirY;
+        const perpY = dirX;
+
+        // Create two lines offset by unit radius in perpendicular direction
+        const line1StartX = startX + perpX * radius;
+        const line1StartY = startY + perpY * radius;
+        const line1EndX = destX + perpX * radius;
+        const line1EndY = destY + perpY * radius;
+
+        const line2StartX = startX - perpX * radius;
+        const line2StartY = startY - perpY * radius;
+        const line2EndX = destX - perpX * radius;
+        const line2EndY = destY - perpY * radius;
+
+        // Check both lines for obstacle intersections
+        const line1Intersects = this.lineIntersectsObstacles(line1StartX, line1StartY, line1EndX, line1EndY);
+        const line2Intersects = this.lineIntersectsObstacles(line2StartX, line2StartY, line2EndX, line2EndY);
+
+        if (line1Intersects || line2Intersects) {
+            console.log(`Unit ${unit.type} path intersects obstacles: line1=${line1Intersects}, line2=${line2Intersects}`);
+        }
+    }
+
+    // Check if a line segment intersects any obstacles
+    lineIntersectsObstacles(x1, y1, x2, y2) {
+        for (const obstacle of game.obstacles) {
+            if (this.lineIntersectsRectangle(x1, y1, x2, y2, obstacle.x, obstacle.y, TILE_SIZE, TILE_SIZE)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Check if line segment intersects rectangle
+    lineIntersectsRectangle(x1, y1, x2, y2, rectX, rectY, rectWidth, rectHeight) {
+        // Check if line is completely outside rectangle
+        if (Math.max(x1, x2) < rectX || Math.min(x1, x2) > rectX + rectWidth ||
+            Math.max(y1, y2) < rectY || Math.min(y1, y2) > rectY + rectHeight) {
+            return false;
+        }
+
+        // Check if line intersects any of the rectangle's edges
+        const edges = [
+            [rectX, rectY, rectX + rectWidth, rectY], // top
+            [rectX + rectWidth, rectY, rectX + rectWidth, rectY + rectHeight], // right
+            [rectX, rectY + rectHeight, rectX + rectWidth, rectY + rectHeight], // bottom
+            [rectX, rectY, rectX, rectY + rectHeight] // left
+        ];
+
+        for (const [ex1, ey1, ex2, ey2] of edges) {
+            if (this.linesIntersect(x1, y1, x2, y2, ex1, ey1, ex2, ey2)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Check if two line segments intersect
+    linesIntersect(x1, y1, x2, y2, x3, y3, x4, y4) {
+        // Calculate direction vectors
+        const uA = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / ((y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1));
+        const uB = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / ((y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1));
+
+        // If uA and uB are between 0-1, lines intersect
+        return (uA >= 0 && uA <= 1 && uB >= 0 && uB <= 1);
     }
 
     draw(ctx) {
