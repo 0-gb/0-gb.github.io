@@ -13,7 +13,8 @@ const HIT_THRESHOLD = 5;
 const FORMATION_UNIT_DISTANCE = 20
 const FORMATION_PIECE_DISTANCE  = 15
 const MIN_RANGE_BUFFER = 20
-const OBSTACLE_COUNT = 4
+const OBSTACLE_COUNT = 15
+
 
 // Stance enum - available to all classes
 const Stance = {
@@ -119,7 +120,9 @@ class AStar {
 
             // if reached target, reconstruct
             if (currentKey === targetKey) {
-                return this.reconstructPath(cameFrom, currentKey, startX, startY, targetX, targetY);
+                const rawPath = this.reconstructPath(cameFrom, currentKey, startX, startY, targetX, targetY);
+                // Smooth the path before returning it
+                return this.smoothPath(rawPath, game.obstacles);
             }
 
             // remove current from openSet and openHeap
@@ -203,7 +206,102 @@ class AStar {
         return path;
     }
 
+    smoothPath(rawPath, obstacles) {
+        if (rawPath.length <= 2) {
+            return rawPath; // No smoothing needed for paths with 2 or fewer points
+        }
 
+        const smoothedPath = [rawPath[0]]; // Start with the first point
+        let currentIndex = 0;
+
+        while (currentIndex < rawPath.length - 1) {
+            let nextIndex = currentIndex + 1;
+            while (nextIndex < rawPath.length) {
+                const startPoint = smoothedPath[smoothedPath.length - 1];
+                const endPoint = rawPath[nextIndex];
+                let hasObstacle = false;
+
+                // Check if the line between startPoint and endPoint intersects any obstacles
+                for (const obstacle of obstacles) {
+                    if (lineIntersectsAABB(startPoint.x, startPoint.y, endPoint.x, endPoint.y, obstacle)) {
+                        hasObstacle = true;
+                        break;
+                    }
+                }
+
+                if (!hasObstacle) {
+                    // If there's no obstacle, we can skip all intermediate points
+                    nextIndex++;
+                } else {
+                    // If there's an obstacle, we can only go up to the previous point
+                    nextIndex--;
+                    break;
+                }
+            }
+
+            if (nextIndex >= rawPath.length) {
+                nextIndex = rawPath.length - 1;
+            }
+
+            if (nextIndex > currentIndex) {
+                smoothedPath.push(rawPath[nextIndex]);
+                currentIndex = nextIndex;
+            } else {
+                // If we couldn't find a clear path, move to the next point
+                currentIndex++;
+                if (currentIndex < rawPath.length) {
+                    smoothedPath.push(rawPath[currentIndex]);
+                }
+            }
+        }
+
+        return smoothedPath;
+    }
+}
+
+// Helper function to check if a line segment intersects an AABB
+function lineIntersectsAABB(x1, y1, x2, y2, obstacle) {
+    // Check if either endpoint is inside the obstacle
+    if ((x1 >= obstacle.x && x1 <= obstacle.x + TILE_SIZE &&
+         y1 >= obstacle.y && y1 <= obstacle.y + TILE_SIZE) ||
+        (x2 >= obstacle.x && x2 <= obstacle.x + TILE_SIZE &&
+         y2 >= obstacle.y && y2 <= obstacle.y + TILE_SIZE)) {
+        return true;
+    }
+
+    // Check if the line segment intersects any of the edges of the AABB
+    const edges = [
+        // Top edge
+        { x1: obstacle.x, y1: obstacle.y, x2: obstacle.x + TILE_SIZE, y2: obstacle.y },
+        // Right edge
+        { x1: obstacle.x + TILE_SIZE, y1: obstacle.y, x2: obstacle.x + TILE_SIZE, y2: obstacle.y + TILE_SIZE },
+        // Bottom edge
+        { x1: obstacle.x, y1: obstacle.y + TILE_SIZE, x2: obstacle.x + TILE_SIZE, y2: obstacle.y + TILE_SIZE },
+        // Left edge
+        { x1: obstacle.x, y1: obstacle.y, x2: obstacle.x, y2: obstacle.y + TILE_SIZE }
+    ];
+
+    for (const edge of edges) {
+        if (lineSegmentsIntersect(x1, y1, x2, y2, edge.x1, edge.y1, edge.x2, edge.y2)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Helper function to check if two line segments intersect
+function lineSegmentsIntersect(x1, y1, x2, y2, x3, y3, x4, y4) {
+    // Calculate the direction of the lines
+    const uA = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / ((y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1));
+    const uB = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / ((y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1));
+
+    // If uA and uB are between 0 and 1, the lines intersect
+    if (uA >= 0 && uA <= 1 && uB >= 0 && uB <= 1) {
+        return true;
+    }
+
+    return false;
 }
 
 // Global A* instance
@@ -629,6 +727,10 @@ class Formation {
         this.centerX = units.reduce((sum, u) => sum + u.x, 0) / units.length;
         this.centerY = units.reduce((sum, u) => sum + u.y, 0) / units.length;
 
+        // A* path for formation center
+        this.centerPath = null;
+        this.currentCenterPathIndex = 0;
+
         // Direction and orientation
         this.offsetX = this.targetX - this.centerX;
         this.offsetY = this.targetY - this.centerY;
@@ -798,24 +900,117 @@ class Formation {
     startMoving() {
         this.isMoving = true;
 
+        // Calculate A* path for formation center
+        this.centerPath = pathfinder.findPath(this.centerX, this.centerY, this.targetX, this.targetY);
+        this.currentCenterPathIndex = 0;
+
         // Update destination for all units (including those removed - they keep their slot)
+        this.updateUnitPositions();
+
+        // Update facing for all units
+        this.allUnits.forEach(unit => {
+            if ('facing' in unit) unit.facing = this.angle;
+        });
+    }
+
+    // Update formation center and unit positions
+    updateFormationCenter(deltaTime) {
+        if (!this.centerPath || this.currentCenterPathIndex >= this.centerPath.length) {
+            this.isMoving = false;
+            return;
+        }
+
+        // Current target waypoint for center
+        const targetWaypoint = this.centerPath[this.currentCenterPathIndex];
+        let dx = targetWaypoint.x - this.centerX;
+        let dy = targetWaypoint.y - this.centerY;
+        let dist = Math.sqrt(dx * dx + dy * dy);
+
+        const isFinalWaypoint = (this.currentCenterPathIndex === this.centerPath.length - 1);
+        const currentSpeed = this.speed;
+
+        // If we're exactly on the waypoint already
+        if (dist === 0) {
+            if (isFinalWaypoint) {
+                this.isMoving = false;
+            }
+            this.currentCenterPathIndex++;
+            this.updateUnitPositions();
+            return;
+        }
+
+        if (isFinalWaypoint) {
+            const SNAP_TOLERANCE = 2; // pixels
+
+            // If we're very close, snap exactly and finish
+            if (dist <= SNAP_TOLERANCE) {
+                this.centerX = targetWaypoint.x;
+                this.centerY = targetWaypoint.y;
+                this.currentCenterPathIndex++;
+                this.isMoving = false;
+                this.updateUnitPositions();
+                return;
+            }
+
+            // Otherwise, move toward final waypoint
+            const moveX = (dx / dist) * currentSpeed;
+            const moveY = (dy / dist) * currentSpeed;
+
+            const newCenterX = this.centerX + moveX;
+            const newCenterY = this.centerY + moveY;
+
+            // If the movement would pass the waypoint - snap to avoid skipping
+            const dot = (targetWaypoint.x - this.centerX) * (targetWaypoint.x - newCenterX) +
+                (targetWaypoint.y - this.centerY) * (targetWaypoint.y - newCenterY);
+            if (dot <= 0) {
+                this.centerX = targetWaypoint.x;
+                this.centerY = targetWaypoint.y;
+                this.currentCenterPathIndex++;
+                this.isMoving = false;
+            } else {
+                // Otherwise apply the move normally
+                this.centerX = newCenterX;
+                this.centerY = newCenterY;
+            }
+            
+            this.updateUnitPositions();
+            return;
+        }
+
+        // Non-final waypoint behavior
+        if (dist < TILE_SIZE / 2) {
+            // reached intermediate waypoint, go to next
+            this.currentCenterPathIndex++;
+            if (this.currentCenterPathIndex >= this.centerPath.length) {
+                this.isMoving = false;
+                return;
+            }
+        } else {
+            // move toward intermediate waypoint
+            const moveX = (dx / dist) * currentSpeed;
+            const moveY = (dy / dist) * currentSpeed;
+
+            this.centerX += moveX;
+            this.centerY += moveY;
+        }
+
+        this.updateUnitPositions();
+    }
+
+    // Update all unit positions based on current formation center
+    updateUnitPositions() {
         this.allUnits.forEach(unit => {
             if (!unit.formationSlot || !unit.inFormation) return;
 
             const { localX, localY } = unit.formationSlot;
             const r = this.rotateLocal(localX, localY);
-            const destX = this.targetX + r.x;
-            const destY = this.targetY + r.y;
-
-            // Check if the movement path intersects obstacles
-            this.checkUnitPathObstacles(unit, destX, destY);
+            const destX = this.centerX + r.x;
+            const destY = this.centerY + r.y;
 
             unit.targetX = destX;
             unit.targetY = destY;
             unit.formationPosition = { x: destX, y: destY };
             unit.moving = true;
-
-            if ('facing' in unit) unit.facing = this.angle;
         });
     }
 
@@ -1669,6 +1864,19 @@ function gameLoop(currentTime) {
     // Update
     game.units.forEach(unit => unit.update(deltaTime));
 
+    // Update formations
+    const formations = new Set();
+    game.units.forEach(unit => {
+        if (unit.formation) {
+            formations.add(unit.formation);
+        }
+    });
+    formations.forEach(formation => {
+        if (formation.isMoving) {
+            formation.updateFormationCenter(deltaTime);
+        }
+    });
+
     // Update projectiles
     game.projectiles = game.projectiles.filter(p => {
         p.update();
@@ -1697,13 +1905,13 @@ function gameLoop(currentTime) {
     game.projectiles.forEach(p => p.draw(ctx));
 
     // Draw formations
-    const formations = new Set();
+    const drawnFormations = new Set();
     game.units.forEach(unit => {
         if (unit.formation) {
-            formations.add(unit.formation);
+            drawnFormations.add(unit.formation);
         }
     });
-    formations.forEach(formation => formation.draw(ctx));
+    drawnFormations.forEach(formation => formation.draw(ctx));
 
     // Draw red cross at center of mass for multiple selected units
     if (game.selectedUnits.length > 1) {
